@@ -1,6 +1,7 @@
 @baseUrl = http://localhost:3000
+@adminKey = dev-only-insecure-admin-key
 
-### Checkout - sucesso
+### Checkout - novo usuário (sucesso)
 POST {{baseUrl}}/api/checkout
 Content-Type: application/json
 
@@ -8,6 +9,30 @@ Content-Type: application/json
   "usr": "Guilherme",
   "eml": "gui@fullcycle.com.br",
   "pwd": "senhaforte",
+  "c_id": 2,
+  "card": "4111222233334444"
+}
+
+### Checkout - usuário existente com senha correta (sucesso)
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Leonan",
+  "eml": "leonan@fullcycle.com.br",
+  "pwd": "123",
+  "c_id": 2,
+  "card": "4111222233334444"
+}
+
+### Checkout - usuário existente com senha errada (401)
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Leonan",
+  "eml": "leonan@fullcycle.com.br",
+  "pwd": "senha-errada",
   "c_id": 2,
   "card": "4111222233334444"
 }
@@ -24,8 +49,16 @@ Content-Type: application/json
   "card": "5111222233334444"
 }
 
-### Relatório financeiro administrativo
+### Relatório financeiro administrativo - sem credenciais (401)
 GET {{baseUrl}}/api/admin/financial-report
 
-### Deletar usuário
+### Relatório financeiro administrativo - com credenciais de admin
+GET {{baseUrl}}/api/admin/financial-report
+x-admin-key: {{adminKey}}
+
+### Deletar usuário - sem credenciais (401)
 DELETE {{baseUrl}}/api/users/1
+
+### Deletar usuário - com credenciais de admin
+DELETE {{baseUrl}}/api/users/1
+x-admin-key: {{adminKey}}
