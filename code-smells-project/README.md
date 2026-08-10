@@ -87,3 +87,102 @@ fora do escopo desta rodada, por decisão explícita de escopo da tarefa:
   rodada. Em vez disso, o global mutável foi encapsulado em uma classe
   `DatabaseConnection`, e a divisão em um módulo de modelo por entidade foi
   concluída conforme especificado.
+
+## Construção da Skill
+
+**Decisões de design.** `SKILL.md` (em `.claude/skills/refactor-arch/`) orquestra um workflow de 3 fases estritamente sequenciais. Cada fase é despachada como um subagente dedicado, que só lê os arquivos de referência que aquela fase precisa (nunca os 5 de uma vez) — mantém o contexto de cada subagente pequeno e focado. O estado intermediário persiste em `.refactor-arch/phase-{1,2,3}-*.md`, dentro do próprio projeto, para sobreviver entre invocações de subagente sem misturar arquivos de trabalho com o entregável final (`reports/`, código refatorado). Entre a Fase 2 e a Fase 3 existe um **gate de confirmação humana obrigatório** (`SKILL.md:51-57`): a skill imprime o relatório de auditoria e pergunta explicitamente `Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]` via `AskUserQuestion` — nenhum arquivo é modificado antes dessa confirmação. Cinco arquivos de referência cobrem as 5 áreas de conhecimento exigidas: `project-analysis.md` (heurísticas de detecção), `anti-pattern-catalog.md` (catálogo com severidade), `report-template.md` (formato do relatório), `architecture-guidelines.md` (regras do MVC alvo) e `refactoring-playbook.md` (12 padrões de transformação com exemplos antes/depois — acima do mínimo de 8 exigido).
+
+**Anti-patterns incluídos e por quê.** O catálogo (`references/anti-pattern-catalog.md`) tem 20 entradas cobrindo toda a escala de severidade do desafio (5 CRITICAL, 4 HIGH, 6 MEDIUM, 5 LOW). Neste projeto especificamente, os hits mais relevantes foram os 8 achados CRITICAL — SQL Injection via concatenação de string (presente em praticamente toda `models.py`), credenciais hardcoded, God Class/God File e dois endpoints administrativos sem autenticação — porque este era o legado mais desestruturado dos 3 projetos-alvo (monolito total, sem qualquer separação em camadas), e foi o principal insumo para calibrar a severidade CRITICAL do catálogo.
+
+**Agnosticismo de tecnologia.** A skill detecta a stack por evidência (extensão de arquivo + parsing de `requirements.txt`), nunca assumindo nomes de arquivo específicos deste projeto (`app.py`/`controllers.py`/`models.py`/`database.py`). A mesma pasta `.claude/skills/refactor-arch/`, sem uma única alteração, foi depois copiada para `ecommerce-api-legacy/` (Node.js/Express) e `task-manager-api/` (Python/Flask parcialmente organizado) e completou as 3 fases com sucesso nos dois — prova empírica de que o conhecimento em `references/` não está acoplado a este projeto.
+
+**Desafios encontrados.** O principal foi decidir o que ficava fora do escopo de uma única rodada de refatoração, para não violar a exigência de preservar a superfície pública da API: a tarefa limitava o novo gate de autenticação apenas aos endpoints `/admin/*`, então `DELETE /produtos/<id>` permaneceu sem autenticação (a injeção de SQL foi corrigida e o delete virou soft-delete); a injeção de dependência via construtor foi julgada grande demais para a rodada e foi parcialmente resolvida encapsulando o global mutável em uma classe `DatabaseConnection`, em vez de uma camada completa de repositórios.
+
+## Resultados
+
+**Resumo da auditoria (Fase 2 da skill):** 30 findings — 8 CRITICAL / 4 HIGH / 10 MEDIUM / 8 LOW ([relatório completo](reports/audit-code-smells-project.md)), batendo exatamente com a análise manual documentada acima.
+
+**Antes/depois da estrutura:**
+```
+# Antes — monolito de 4 arquivos na raiz, sem camadas
+app.py  controllers.py  models.py  database.py
+
+# Depois — MVC completo
+src/
+├── app.py                    # composition root
+├── config/settings.py
+├── database/connection.py
+├── models/                   # product_model.py, user_model.py, order_model.py
+├── controllers/               # product_, user_, order_, report_, health_, admin_controller.py
+├── views/                     # *_routes.py (Flask Blueprints)
+├── middlewares/               # auth.py, error_handler.py
+└── services/notification_service.py
+```
+
+**Checklist de validação preenchida:**
+```markdown
+### Fase 1 — Análise
+- [x] Linguagem detectada corretamente (Python)
+- [x] Framework detectado corretamente (Flask 3.1.1)
+- [x] Domínio da aplicação descrito corretamente (E-commerce: produtos, pedidos, usuários)
+- [x] Número de arquivos analisados condiz com a realidade (4 arquivos)
+
+### Fase 2 — Auditoria
+- [x] Relatório segue o template definido nos arquivos de referência
+- [x] Cada finding tem arquivo e linhas exatos
+- [x] Findings ordenados por severidade (CRITICAL → LOW)
+- [x] Mínimo de 5 findings identificados (30 findings)
+- [x] Detecção de APIs deprecated incluída (Flask debug mode em produção)
+- [x] Skill pausa e pede confirmação antes da Fase 3
+
+### Fase 3 — Refatoração
+- [x] Estrutura de diretórios segue padrão MVC
+- [x] Configuração extraída para módulo de config (sem hardcoded)
+- [x] Models criados para abstrair dados (um por entidade)
+- [x] Views/Routes separadas para roteamento (Flask Blueprints)
+- [x] Controllers concentram o fluxo da aplicação
+- [x] Error handling centralizado (`middlewares/error_handler.py`)
+- [x] Entry point claro (`src/app.py`)
+- [x] Aplicação inicia sem erros
+- [x] Endpoints originais respondem corretamente (19 rotas verificadas via curl)
+```
+
+**Log de boot após a refatoração:**
+```
+==================================================
+SERVIDOR INICIADO
+Rodando em http://localhost:5050
+==================================================
+ * Serving Flask app 'app'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5050
+```
+Os 19 endpoints originais foram verificados via `curl`, incluindo uma tentativa de SQL injection (payload `Hack'); DROP TABLE produtos;--` no nome de um produto) — armazenada como dado literal em vez de executada, confirmando as queries parametrizadas. Detalhe request-a-request completo em [`.refactor-arch/phase-3-validation.md`](.refactor-arch/phase-3-validation.md).
+
+**Observações.** Este foi o projeto mais desestruturado dos 3 (monolito total em 4 arquivos, sem qualquer camada), por isso a Fase 3 precisou criar toda a árvore MVC do zero — o maior esforço de refatoração entre os 3 projetos, mas sem nenhuma regressão de comportamento em endpoints não-administrativos.
+
+## Como Executar
+
+### Pré-requisitos
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) instalado e autenticado (`claude` disponível no `PATH`).
+- Python 3.11+, `pip`, `venv`.
+
+### Comando para executar a skill
+
+A skill já está commitada em `.claude/skills/refactor-arch/` — não é necessário copiá-la manualmente.
+
+```bash
+cd code-smells-project
+claude "/refactor-arch"
+```
+
+A skill imprime o resumo da Fase 1, depois o relatório completo da Fase 2, e pausa com `Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]` — responda `y` para prosseguir com a Fase 3.
+
+### Como validar que a refatoração funcionou
+
+1. **Saída da própria skill** — ao final da Fase 3, ela confirma "Application boots without errors" e "All endpoints respond correctly"; se algo falhar, reporta o que quebrou em vez de declarar sucesso.
+2. **Subir a aplicação manualmente** seguindo a seção "Como rodar" acima e testar os endpoints com `curl` — exemplos completos (incluindo casos de borda e a tentativa de SQL injection) em [`.refactor-arch/phase-3-validation.md`](.refactor-arch/phase-3-validation.md).
+3. **Cruzar achado vs. correção** — comparar [`reports/audit-code-smells-project.md`](reports/audit-code-smells-project.md) com `.refactor-arch/phase-3-validation.md` e confirmar que todo item CRITICAL/HIGH aparece corrigido (ou com nota de escopo explícita, como o caso de `DELETE /produtos/<id>`).
