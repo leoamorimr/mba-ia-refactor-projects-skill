@@ -1,0 +1,45 @@
+"""Authentication middleware.
+
+Verifies real, signed JWTs (issued by controllers/user_controller.login)
+against the app's SECRET_KEY. Apply @login_required to every mutating /
+destructive route -- there is no session or cookie auth in this app, only
+bearer tokens.
+"""
+from functools import wraps
+
+import jwt
+from flask import current_app, g, jsonify, request
+
+from models.user import User
+
+
+def login_required(view_func):
+    @wraps(view_func)
+    def wrapper(*args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Token de autenticação ausente'}), 401
+
+        token = auth_header[len('Bearer '):].strip()
+        if not token:
+            return jsonify({'error': 'Token de autenticação ausente'}), 401
+
+        try:
+            payload = jwt.decode(
+                token,
+                current_app.config['SECRET_KEY'],
+                algorithms=['HS256'],
+            )
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token expirado'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Token inválido'}), 401
+
+        user = User.query.get(payload.get('user_id'))
+        if not user or not user.active:
+            return jsonify({'error': 'Usuário inválido ou inativo'}), 401
+
+        g.current_user = user
+        return view_func(*args, **kwargs)
+
+    return wrapper
