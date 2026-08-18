@@ -11,14 +11,14 @@ npm start
 
 A aplicação sobe em `http://localhost:3000`. O banco SQLite é em memória e já carrega seeds automaticamente no boot.
 
-Configuração via variáveis de ambiente (veja `.env.example`). Sem um `.env`, a aplicação usa valores padrão claramente marcados como "dev-only" apenas para desenvolvimento local.
+Configuração via variáveis de ambiente (veja `.env.example`). `ADMIN_API_KEY` é obrigatória — a aplicação falha ao subir (com um erro claro) se essa variável não estiver definida, seja via `.env` local (carregado automaticamente por `dotenv`) ou via variável de ambiente real em produção.
 
 ## Autenticação de administrador
 
-O relatório financeiro (`GET /api/admin/financial-report`) e a exclusão de usuário (`DELETE /api/users/:id`) exigem um header `x-admin-key` com o valor de `ADMIN_API_KEY` (padrão de desenvolvimento: `dev-only-insecure-admin-key`). Requisições sem esse header, ou com um valor incorreto, recebem `401 Unauthorized`.
+O relatório financeiro (`GET /api/admin/financial-report`) e a exclusão de usuário (`DELETE /api/users/:id`) exigem um header `x-admin-key` com o valor de `ADMIN_API_KEY`. Requisições sem esse header, ou com um valor incorreto, recebem `401 Unauthorized`.
 
 ```bash
-curl -H "x-admin-key: dev-only-insecure-admin-key" http://localhost:3000/api/admin/financial-report
+curl -H "x-admin-key: <set-a-strong-admin-key>" http://localhost:3000/api/admin/financial-report
 ```
 
 Exemplos de requisições estão em `api.http`.

@@ -4,6 +4,10 @@
 const { z } = require('zod');
 const { ValidationError } = require('../utils/errors');
 
+const DEFAULT_REPORT_PAGE = 1;
+const DEFAULT_REPORT_LIMIT = 50;
+const MAX_REPORT_LIMIT = 100;
+
 function formatZodError(error) {
     return error.issues.map((issue) => issue.message).join('; ');
 }
@@ -49,8 +53,14 @@ function validateUserIdParam(req, res, next) {
 }
 
 const reportQuerySchema = z.object({
-    page: z.coerce.number().int().positive().optional().default(1),
-    limit: z.coerce.number().int().positive().max(100).optional().default(50),
+    page: z.coerce.number().int().positive().optional().default(DEFAULT_REPORT_PAGE),
+    limit: z.coerce
+        .number()
+        .int()
+        .positive()
+        .max(MAX_REPORT_LIMIT)
+        .optional()
+        .default(DEFAULT_REPORT_LIMIT),
 });
 
 function validateReportQuery(req, res, next) {

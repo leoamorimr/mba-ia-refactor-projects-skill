@@ -10,7 +10,7 @@ const router = express.Router();
 router.delete('/api/users/:id', requireAdmin, validateUserIdParam, async (req, res, next) => {
     try {
         const result = await userController.deleteUser(req.validated.id);
-        res.status(200).send(result.message);
+        res.status(200).json({ message: result.message });
     } catch (err) {
         next(err);
     }

@@ -16,12 +16,6 @@ class ValidationError extends AppError {
     }
 }
 
-class BadRequestError extends AppError {
-    constructor(message) {
-        super(message, 400);
-    }
-}
-
 class UnauthorizedError extends AppError {
     constructor(message) {
         super(message, 401);
@@ -43,7 +37,6 @@ class PaymentDeniedError extends AppError {
 module.exports = {
     AppError,
     ValidationError,
-    BadRequestError,
     UnauthorizedError,
     NotFoundError,
     PaymentDeniedError,

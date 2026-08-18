@@ -89,4 +89,4 @@ async function seedData() {
     logger.info('Database seeded with initial data');
 }
 
-module.exports = { getDb, run, get, all, transaction, initSchema, seedData };
+module.exports = { run, get, all, transaction, initSchema, seedData };

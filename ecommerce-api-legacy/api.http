@@ -1,5 +1,5 @@
 @baseUrl = http://localhost:3000
-@adminKey = dev-only-insecure-admin-key
+@adminKey = <set-a-strong-admin-key>
 
 ### Checkout - novo usuário (sucesso)
 POST {{baseUrl}}/api/checkout

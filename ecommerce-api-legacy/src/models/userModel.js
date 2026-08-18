@@ -1,6 +1,7 @@
 // Data access only for the `users` table — no HTTP concepts, no business
 // rules, just parameterized queries.
 const db = require('../config/database');
+const { findByIdsIn } = require('../utils/query');
 
 async function findByEmail(email) {
     return db.get('SELECT id, name, email, pass FROM users WHERE email = ?', [email]);
@@ -11,9 +12,7 @@ async function findById(id) {
 }
 
 async function findByIds(ids) {
-    if (!ids.length) return [];
-    const placeholders = ids.map(() => '?').join(',');
-    return db.all(`SELECT id, name, email FROM users WHERE id IN (${placeholders})`, ids);
+    return findByIdsIn('users', 'id', ids, ['id', 'name', 'email']);
 }
 
 async function create({ name, email, passwordHash }) {

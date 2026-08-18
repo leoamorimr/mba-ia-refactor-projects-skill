@@ -1,279 +1,191 @@
 ================================
-PHASE 3 — REFACTOR VALIDATION REPORT
+PHASE 3 — REFACTOR VALIDATION REPORT (follow-up round)
 ================================
 Project: ecommerce-api-legacy
 Stack:    Node.js + Express ^4.18.2, sqlite3 ^5.1.6 (in-memory), bcryptjs, zod, dotenv
 
-## 1. New directory structure
+This is a **targeted fix-up round**, not a restructuring pass. The project was
+already in clean MVC shape from the prior refactor (`config/`, `controllers/`,
+`middlewares/`, `models/`, `routes/`, `services/`, `utils/` under `src/`). No
+folders were reorganized and no files were moved. The only job this round was
+to apply the fix matching each of the 5 findings from `.refactor-arch/phase-2-audit.md`
+(0 CRITICAL / 1 HIGH / 1 MEDIUM / 3 LOW).
 
-The flat 3-file god-file setup (`src/app.js`, `src/AppManager.js`, `src/utils.js`) was
-replaced with a layered MVC structure using Node/Express folder conventions.
-`src/AppManager.js` and `src/utils.js` were deleted; every responsibility they held
-was moved into the layers below.
+## 1. Directory structure (unchanged in shape)
 
 ```
 ecommerce-api-legacy/
-├── .env.example              # documents every env var; no secrets committed
-├── .gitignore                 # node_modules/, .env
-├── api.http                   # updated with pwd field + x-admin-key examples
-├── package.json               # + bcryptjs, dotenv, zod
-├── README.md                  # documents admin auth header
+├── .env.example
+├── api.http
+├── package.json
+├── README.md
 └── src/
-    ├── app.js                 # composition root: wiring only
+    ├── app.js                     # composition root (unchanged)
     ├── config/
-    │   ├── index.js           # env-based settings (port, secrets, admin key, bcrypt rounds)
-    │   └── database.js        # sole owner of the sqlite3 connection; promisified
-    │                          # run/get/all + transaction() helper; schema + seed
-    ├── models/                 # data access only, one file per entity
-    │   ├── userModel.js
-    │   ├── courseModel.js
-    │   ├── enrollmentModel.js
-    │   ├── paymentModel.js
-    │   └── auditLogModel.js
-    ├── controllers/            # orchestration / business rules
-    │   ├── checkoutController.js
-    │   ├── financialReportController.js
-    │   └── userController.js
-    ├── routes/                 # routing + response shaping only
-    │   ├── index.js
-    │   ├── checkoutRoutes.js
-    │   ├── adminRoutes.js
-    │   └── userRoutes.js
+    │   ├── index.js               # MODIFIED — fail-fast on missing ADMIN_API_KEY,
+    │   │                          #            unused fields removed
+    │   └── database.js            # MODIFIED — getDb no longer exported publicly
+    ├── models/
+    │   ├── userModel.js           # MODIFIED — uses utils/query.findByIdsIn
+    │   ├── courseModel.js         # unchanged
+    │   ├── enrollmentModel.js     # MODIFIED — uses utils/query.findByIdsIn
+    │   ├── paymentModel.js        # MODIFIED — uses utils/query.findByIdsIn,
+    │   │                          #            PAYMENT_STATUS.DENIED removed
+    │   └── auditLogModel.js       # unchanged
+    ├── controllers/
+    │   ├── checkoutController.js  # unchanged
+    │   ├── financialReportController.js  # unchanged
+    │   └── userController.js      # unchanged
+    ├── routes/
+    │   ├── index.js               # unchanged
+    │   ├── checkoutRoutes.js      # unchanged
+    │   ├── adminRoutes.js         # unchanged
+    │   └── userRoutes.js          # MODIFIED — DELETE now returns JSON
     ├── middlewares/
-    │   ├── auth.js             # requireAdmin (shared-secret admin guard)
-    │   ├── errorHandler.js     # single centralized error handler
-    │   └── validators.js       # zod schemas for checkout / id param / report query
-    ├── services/
-    │   ├── paymentService.js   # card-approval rule + card masking
-    │   ├── passwordService.js  # bcrypt hash/verify
-    │   └── cacheService.js     # injectable cache (replaces global mutable cache)
+    │   ├── auth.js                # unchanged
+    │   ├── errorHandler.js        # unchanged
+    │   └── validators.js          # MODIFIED — named pagination constants
+    ├── services/                  # unchanged (paymentService, passwordService, cacheService)
     └── utils/
-        ├── errors.js           # AppError + typed subclasses (404/401/400)
-        └── logger.js           # structured JSON logger (replaces console.log)
+        ├── errors.js              # MODIFIED — BadRequestError removed
+        ├── logger.js              # unchanged
+        └── query.js               # NEW — shared findByIdsIn(table, column, ids, cols) helper
 ```
 
-## 2. Authentication mechanism (new — project had none)
+Only one new file was added (`src/utils/query.js`, a small shared helper — not a
+new layer or a reorganization). No existing file was moved or renamed. `git status`
+confirms: 9 modified files under `src/`, plus `.env.example`, `README.md`, `api.http`
+updated for finding #1, and one untracked new file (`src/utils/query.js`).
 
-There was no auth system at all in the legacy code. The simplest mechanism that
-actually enforces authorization was implemented: a **shared-secret API key** checked
-by the `requireAdmin` middleware (`src/middlewares/auth.js`) against `config.adminApiKey`
-(env var `ADMIN_API_KEY`, dev-only default `dev-only-insecure-admin-key`, documented in
-`.env.example` and `README.md`).
-
-**How to authenticate as admin:** send header `x-admin-key: <ADMIN_API_KEY>` on any
-request to:
-- `GET /api/admin/financial-report`
-- `DELETE /api/users/:id`
-
-Missing or wrong key → `401 Unauthorized` with `{"error":"Unauthorized: valid x-admin-key header required"}`.
-
-Checkout authentication (separate from the admin guard) is now a real password check:
-existing users must submit the correct password (verified with bcrypt against the
-stored hash); new users' passwords are hashed with bcrypt (no more silent `"123456"`
-default).
-
-## 3. Findings → fix mapping (21/21)
+## 2. Findings fixed (5/5)
 
 | # | Severity | Finding | Fix applied |
 |---|----------|---------|-------------|
-| 1 | CRITICAL | God Class / God File | Split `AppManager.js` into `models/` (5 files, data only), `controllers/` (3 files, orchestration), `routes/` (4 files, routing), `config/database.js` (connection/schema/seed), `services/` (payment/password/cache), `middlewares/` (auth/error/validation). |
-| 2 | CRITICAL | Broken auth — password never verified on checkout | `checkoutController.resolveUserId` now calls `passwordService.verifyPassword` against the stored hash for existing users and throws `UnauthorizedError` (401) on mismatch; verified live in test 3 below. |
-| 3 | CRITICAL | Sensitive data logged in plaintext (card + gateway secret) | Removed the `console.log` line entirely; `checkoutController` now logs via the structured `logger` with `paymentService.maskCard()` — only `**** **** **** 4444` is ever logged, never the gateway key. Verified in boot log (section 5). |
-| 4 | CRITICAL | Unauthenticated admin endpoint | `GET /api/admin/financial-report` now requires `requireAdmin` middleware; unauthenticated calls get 401 (verified in test 5). |
-| 5 | CRITICAL | Unauthenticated destructive delete endpoint | `DELETE /api/users/:id` now requires `requireAdmin`; unauthenticated calls get 401 (verified in test 7). |
-| 6 | CRITICAL | Hardcoded credentials/secrets | `src/utils.js`'s literal `config` object removed; `src/config/index.js` reads every secret from `process.env`, with clearly-labeled `dev-only-*` fallbacks for local dev only. The exposed `pk_live_1234567890abcdef` key is gone from source; flagging again here that it must be rotated with the real payment gateway since it was previously committed. |
-| 7 | CRITICAL | Weak/homegrown password hashing (`badCrypto`) | Replaced with `bcryptjs` (`passwordService.hashPassword`/`verifyPassword`), salted, configurable rounds via `BCRYPT_SALT_ROUNDS`. The `"123456"` silent default is gone — password is now a required, validated field for both new and existing users. |
-| 8 | HIGH | Tight coupling / no DI | DB connection instantiation lives solely in `config/database.js` (composition root concern); `checkoutController` is a factory (`createCheckoutController({ cacheService })`) that receives its cache dependency via injection instead of importing a shared mutable module. |
-| 9 | HIGH | Fat controller — checkout logic in route handler | All checkout orchestration moved to `controllers/checkoutController.js`; `routes/checkoutRoutes.js` only validates, calls the controller, and shapes the response. |
-| 10 | HIGH | Fat controller — financial report aggregation in route handler | Aggregation moved to `controllers/financialReportController.js`; the route only calls it and returns JSON. |
-| 11 | HIGH | Mutable global state (`globalCache`/`totalRevenue`) | Replaced with `services/cacheService.js`, a class instantiated once in the composition root (`app.js`) and injected into the checkout controller — no module-level mutable export. |
-| 12 | MEDIUM | No centralized error handling / no structured logging | Added `middlewares/errorHandler.js` registered last in `app.js`; introduced typed `AppError` subclasses (`utils/errors.js`) that map to status codes; replaced all `console.log` diagnostics with `utils/logger.js` (structured JSON lines). |
-| 13 | MEDIUM | Missing input validation — checkout payload | `middlewares/validators.js` (`validateCheckout`, zod schema) checks types/formats for `usr`, `eml` (valid email), `pwd`, `c_id` (positive int), `card` (13–19 digits) before any DB call. |
-| 14 | MEDIUM | Missing pagination on financial report | `validateReportQuery` accepts optional `page`/`limit` query params (default `page=1`, `limit=50`, max `100`); `courseModel.listPage` applies `LIMIT`/`OFFSET` to the outer course list. |
-| 15 | MEDIUM | N+1 queries in financial report | `financialReportController.getReport` now runs 4 queries total regardless of data volume (1 for courses, 1 batched `IN (...)` for enrollments, 2 parallel batched `IN (...)` for payments/users) instead of `1 + N + 2N`. |
-| 16 | MEDIUM | Missing input validation — delete id param | `validateUserIdParam` (zod) requires `id` to be a positive integer before the controller runs; non-numeric ids now get 400 instead of silently reaching the query. |
-| 17 | MEDIUM | Deletes that break referential integrity | `userController.deleteUser` wraps `paymentModel.deleteByEnrollmentUserId`, `enrollmentModel.deleteByUserId`, and `userModel.deleteById` in one `database.transaction()`; dependents are removed atomically with the user. Verified live in the post-delete report sanity check (section 5) — no orphaned/"Unknown" rows. |
-| 18 | LOW | Dead code (`totalRevenue`) | Removed entirely; not carried into any new module. |
-| 19 | LOW | Poor naming (`u`, `e`, `p`, `cid`, `cc`) | Wire format (`usr`/`eml`/`pwd`/`c_id`/`card`) preserved for API compatibility, but `validateCheckout` maps them to descriptive names (`username`, `email`, `password`, `courseId`, `cardNumber`) used everywhere downstream. |
-| 20 | LOW | Magic number — card approval rule | Extracted to `paymentService.APPROVED_TEST_CARD_PREFIX` with a comment documenting it's a test-card stand-in for a real gateway integration. |
-| 21 | LOW | Magic numbers — `badCrypto` constants | Moot: `badCrypto` itself was deleted and replaced by bcrypt (finding #7); no unexplained loop-bound/substring literals remain. |
+| 1 | HIGH | `adminApiKey` fell back to the literal `'dev-only-insecure-admin-key'` when `ADMIN_API_KEY` unset; same value hardcoded in `README.md` and `api.http` | `src/config/index.js` now throws a clear `Error` at require-time if `process.env.ADMIN_API_KEY` is unset (checked immediately after `dotenv.config()`, so a local `.env` still satisfies it). `README.md` and `api.http` now show `<set-a-strong-admin-key>` instead of a real working value. `.env.example` documents `ADMIN_API_KEY` as REQUIRED with the same placeholder. |
+| 2 | MEDIUM | `DELETE /api/users/:id` responded with `res.status(200).send(result.message)` (raw text) | `src/routes/userRoutes.js:13` changed to `res.status(200).json({ message: result.message })`. Verified live: response is now `{"message":"..."}` with `content-type: application/json`. |
+| 3 | LOW | Dead code: `dbUser`/`dbPass`/`paymentGatewayKey`/`smtpUser` (config), `BadRequestError` (utils/errors.js), `PAYMENT_STATUS.DENIED` (paymentModel.js), `getDb` export (config/database.js) | Grepped the whole `src/` tree first to confirm zero references outside their own definitions before removing each. `dbUser`/`dbPass`/`paymentGatewayKey`/`smtpUser` fields deleted from `config/index.js` (and their env vars removed from `.env.example`). `BadRequestError` class + export deleted from `utils/errors.js`. `PAYMENT_STATUS.DENIED` deleted from `paymentModel.js` (only `PAID` remains, matching the only status the app ever writes). `getDb` is no longer in `database.js`'s `module.exports` — it remains as an internal, unexported helper since `run`/`get`/`all` still call it. |
+| 4 | LOW | Near-identical "build placeholders + `SELECT ... WHERE col IN (...)`" logic duplicated in `enrollmentModel.js`, `paymentModel.js`, `userModel.js` | Extracted `findByIdsIn(table, column, ids, selectColumns)` into new `src/utils/query.js`. All three models' batch-lookup functions (`findByCourseIds`, `findByEnrollmentIds`, `findByIds`) now call it instead of re-implementing the placeholder-building logic. |
+| 5 | LOW | Magic numbers `1`, `50`, `100` embedded in the pagination zod schema | `src/middlewares/validators.js` now defines `DEFAULT_REPORT_PAGE = 1`, `DEFAULT_REPORT_LIMIT = 50`, `MAX_REPORT_LIMIT = 100` near the top of the file, and `reportQuerySchema` references them instead of the inline literals. |
 
-## 4. Dependencies added
+No CRITICAL findings this round, so no auth-gating work was needed or done.
 
-Added to `package.json` and installed via `npm install` (194 packages, 0 install errors):
-- `bcryptjs` — pure-JS bcrypt-compatible hashing (avoids native build issues, same API/algorithm as `bcrypt`)
-- `dotenv` — loads `.env` for local development
-- `zod` — schema validation at route boundaries
+## 3. Dependencies
 
-`sqlite3` and `express` versions unchanged.
+No changes to `package.json` (none of the 5 fixes required a new dependency).
+Ran `npm install` anyway to materialize `node_modules` for the boot test — 194
+packages installed, 0 errors, `package-lock.json` unchanged.
 
-## 5. Boot verification
+## 4. Boot verification
+
+### 4.1 Fail-fast check WITHOUT `ADMIN_API_KEY` set (the key regression test for finding #1)
 
 ```
-$ npm start
-> desafio-arquitetura-ia-boilerplate@1.0.0 start
-> node src/app.js
+$ env -i PATH="$PATH" HOME="$HOME" node src/app.js
+/.../src/config/index.js:13
+    throw new Error(
+    ^
 
-{"level":"info","message":"Database seeded with initial data","timestamp":"2026-08-09T17:51:34.240Z"}
-{"level":"info","message":"Frankenstein LMS rodando na porta 3000...","timestamp":"2026-08-09T17:51:34.243Z"}
+Error: Missing required environment variable ADMIN_API_KEY. Set it in your environment or in a local .env file before starting the app (see .env.example).
+    at Object.<anonymous> (/.../src/config/index.js:13:11)
+    ...
+Node.js v22.22.1
+
+$ echo $?
+1
 ```
 
-App booted cleanly on port 3000 (no `.env` present — all config used the labeled
-dev-only defaults). No errors, no stack traces.
+Confirmed: the app no longer silently starts with the insecure default — it now
+fails fast at boot with a clear, actionable error message, and exits non-zero
+before any server is opened.
 
-## 6. Endpoint-by-endpoint validation (live curl requests)
+### 4.2 Normal boot WITH `ADMIN_API_KEY` set
 
-### 6.1 Checkout — new user (should succeed)
-```bash
-curl -s -i -X POST http://localhost:3000/api/checkout \
-  -H "Content-Type: application/json" \
-  -d '{"usr":"Guilherme","eml":"gui@fullcycle.com.br","pwd":"senhaforte","c_id":2,"card":"4111222233334444"}'
 ```
-Result: `HTTP/1.1 200 OK`
+$ ADMIN_API_KEY="test-strong-admin-key-123" PORT=3000 node src/app.js
+{"level":"info","message":"Database seeded with initial data","timestamp":"2026-08-18T09:20:22.999Z"}
+{"level":"info","message":"Frankenstein LMS rodando na porta 3000...","timestamp":"2026-08-18T09:20:23.003Z"}
+```
+
+Boots cleanly, no errors, no stack traces — confirms local/dev usability is
+preserved as long as `ADMIN_API_KEY` is set (via env var here; a `.env` file
+works identically since `dotenv.config()` runs before the check).
+
+## 5. Endpoint-by-endpoint validation (live curl requests, app running with `ADMIN_API_KEY=test-strong-admin-key-123`)
+
+### 5.1 Checkout — new user (success)
+Request: `POST /api/checkout` `{"usr":"Guilherme","eml":"gui@fullcycle.com.br","pwd":"senhaforte","c_id":2,"card":"4111222233334444"}`
+Result: `200` — `{"msg":"Sucesso","enrollment_id":2}`
+
+### 5.2 Checkout — existing user, correct password (success)
+Request: `POST /api/checkout` `{"usr":"Leonan","eml":"leonan@fullcycle.com.br","pwd":"123","c_id":2,"card":"4111222233334444"}`
+Result: `200` — `{"msg":"Sucesso","enrollment_id":3}`
+
+### 5.3 Checkout — existing user, wrong password (still rejected)
+Result: `401` — `{"error":"Credenciais inválidas"}`
+
+### 5.4 Checkout — payment declined
+Request: card not starting with `4` (`5111222233334444`)
+Result: `400` — `{"error":"Pagamento recusado"}`
+
+### 5.5 `GET /api/users/:id`
+Result: `404` — `Cannot GET /api/users/1`. **This route does not exist and never did** —
+the original API surface is only `POST /api/checkout`, `GET /api/admin/financial-report`,
+and `DELETE /api/users/:id` (confirmed against `api.http` and `src/routes/index.js`,
+which mounts exactly `checkoutRoutes`, `adminRoutes`, `userRoutes` — the latter defines
+only the `DELETE` handler). The 404 is expected behavior, not a regression; no such
+endpoint was added since the task requires preserving, not expanding, the public API
+surface.
+
+### 5.6 `GET /api/admin/financial-report` — no credentials
+Result: `401` — `{"error":"Unauthorized: valid x-admin-key header required"}`
+
+### 5.6b same endpoint — wrong key
+Result: `401` — `{"error":"Unauthorized: valid x-admin-key header required"}`
+
+### 5.7 `GET /api/admin/financial-report` — correct `x-admin-key`
+Result: `200` —
 ```json
-{"msg":"Sucesso","enrollment_id":2}
+[{"course":"Clean Architecture","revenue":997,"students":[{"student":"Leonan","paid":997}]},{"course":"Docker","revenue":994,"students":[{"student":"Guilherme","paid":497},{"student":"Leonan","paid":497}]}]
 ```
-Matches original happy-path shape (`{msg, enrollment_id}`).
+Correctly reflects the two checkouts from 5.1/5.2. Also verified pagination still
+works with the new named constants: `?page=1&limit=1` → `200` with one course;
+`?limit=101` → `400` — `{"error":"Number must be less than or equal to 100"}` (cap
+still enforced at 100 after the magic-number extraction).
 
-### 6.2 Checkout — existing user + correct password (should succeed)
-```bash
-curl -s -i -X POST http://localhost:3000/api/checkout \
-  -H "Content-Type: application/json" \
-  -d '{"usr":"Leonan","eml":"leonan@fullcycle.com.br","pwd":"123","c_id":2,"card":"4111222233334444"}'
-```
-Result: `HTTP/1.1 200 OK`
+### 5.8 `DELETE /api/users/:id` — no credentials
+Result: `401` — `{"error":"Unauthorized: valid x-admin-key header required"}`
+
+### 5.9 `DELETE /api/users/:id` — with admin credentials (JSON shape confirmed — finding #2)
+Result: `200`, `content-type: application/json; charset=utf-8` —
 ```json
-{"msg":"Sucesso","enrollment_id":3}
+{"message":"Usuário deletado com sucesso, incluindo matrículas e pagamentos associados."}
 ```
-The seeded user `leonan@fullcycle.com.br` has password `123` (hashed with bcrypt at
-seed time so the check is real, not bypassed).
+This confirms finding #2 is fixed: the response is now a JSON object (previously
+raw text/`send()`).
 
-### 6.3 Checkout — existing user + wrong password (should now reject, unlike before)
-```bash
-curl -s -i -X POST http://localhost:3000/api/checkout \
-  -H "Content-Type: application/json" \
-  -d '{"usr":"Leonan","eml":"leonan@fullcycle.com.br","pwd":"wrongpass","c_id":2,"card":"4111222233334444"}'
-```
-Result: `HTTP/1.1 401 Unauthorized`
+### 5.10 Referential-integrity sanity check after delete
+`GET /api/admin/financial-report` (with admin key) afterward shows Leonan's
+enrollment/payment removed cleanly — no orphaned rows:
 ```json
-{"error":"Credenciais inválidas"}
-```
-Confirms the broken-authentication finding is fixed — this previously succeeded
-silently with zero credential verification.
-
-### 6.4 Admin financial report — no credentials (should now 401, unlike before)
-```bash
-curl -s -i http://localhost:3000/api/admin/financial-report
-```
-Result: `HTTP/1.1 401 Unauthorized`
-```json
-{"error":"Unauthorized: valid x-admin-key header required"}
+[{"course":"Clean Architecture","revenue":0,"students":[]},{"course":"Docker","revenue":497,"students":[{"student":"Guilherme","paid":497}]}]
 ```
 
-### 6.5 Admin financial report — with correct admin credentials (should succeed)
-```bash
-curl -s -i http://localhost:3000/api/admin/financial-report \
-  -H "x-admin-key: dev-only-insecure-admin-key"
-```
-Result: `HTTP/1.1 200 OK`
-```json
-[
-  {"course":"Clean Architecture","revenue":997,"students":[{"student":"Leonan","paid":997}]},
-  {"course":"Docker","revenue":994,"students":[{"student":"Guilherme","paid":497},{"student":"Leonan","paid":497}]}
-]
-```
-Matches original happy-path shape (`[{course, revenue, students:[{student, paid}]}]`),
-correctly reflecting the two checkouts from 6.1/6.2.
+### 5.11 Extra sanity check
+Deleting the same (already-deleted) user id again → `404` — `{"error":"Usuário não encontrado"}`.
 
-### 6.6 Delete user — no credentials (should now 401, unlike before)
-```bash
-curl -s -i -X DELETE http://localhost:3000/api/users/1
-```
-Result: `HTTP/1.1 401 Unauthorized`
-```json
-{"error":"Unauthorized: valid x-admin-key header required"}
-```
+## 6. Process cleanup
 
-### 6.7 Delete user — with admin credentials (should succeed)
-```bash
-curl -s -i -X DELETE http://localhost:3000/api/users/1 \
-  -H "x-admin-key: dev-only-insecure-admin-key"
-```
-Result: `HTTP/1.1 200 OK`
-```
-Usuário deletado com sucesso, incluindo matrículas e pagamentos associados.
-```
-Same response type (plain text, 200) as the original happy path; wording updated
-because the original text literally admitted to leaving orphaned rows, which this
-refactor fixes (see 6.8).
+The background server (PID confirmed via `ps`) was stopped after all checks
+completed; verified no `node src/app.js` process remained running.
 
-### 6.8 Sanity check — referential integrity after delete
-```bash
-curl -s -i http://localhost:3000/api/admin/financial-report -H "x-admin-key: dev-only-insecure-admin-key"
-```
-Result: `HTTP/1.1 200 OK`
-```json
-[
-  {"course":"Clean Architecture","revenue":0,"students":[]},
-  {"course":"Docker","revenue":497,"students":[{"student":"Guilherme","paid":497}]}
-]
-```
-Leonan's enrollment/payment for "Clean Architecture" is gone along with the user —
-no orphaned rows, no "Unknown" student entries, no crash. This confirms the
-cascade-delete transaction worked.
+## 7. Summary
 
-### 6.9 Additional sanity checks (not required, run for extra confidence)
-- Deleting the same user id again → `404 {"error":"Usuário não encontrado"}`.
-- Checkout with a card not starting with `4` → `400 {"error":"Pagamento recusado"}`.
-- Checkout with a non-existent course id → `404 {"error":"Curso não encontrado"}`.
-
-## 7. Log output during the test run (no secrets/PII leaked)
-
-```json
-{"level":"info","message":"Database seeded with initial data",...}
-{"level":"info","message":"Frankenstein LMS rodando na porta 3000...",...}
-{"level":"info","message":"Processing checkout payment",...,"maskedCard":"**** **** **** 4444"}
-{"level":"info","message":"Cache set",...,"key":"last_checkout_2"}
-{"level":"info","message":"Processing checkout payment",...,"maskedCard":"**** **** **** 4444"}
-{"level":"info","message":"Cache set",...,"key":"last_checkout_1"}
-{"level":"warn","message":"Credenciais inválidas",...,"statusCode":401,"path":"/api/checkout"}
-{"level":"warn","message":"Unauthorized: valid x-admin-key header required",...,"statusCode":401,"path":"/api/admin/financial-report"}
-{"level":"warn","message":"Unauthorized: valid x-admin-key header required",...,"statusCode":401,"path":"/api/users/1"}
-{"level":"warn","message":"Usuário não encontrado",...,"statusCode":404,"path":"/api/users/1"}
-{"level":"info","message":"Processing checkout payment",...,"maskedCard":"**** **** **** 4444"}
-{"level":"warn","message":"Pagamento recusado",...,"statusCode":400,"path":"/api/checkout"}
-{"level":"warn","message":"Curso não encontrado",...,"statusCode":404,"path":"/api/checkout"}
-```
-No raw card number and no `paymentGatewayKey` value appear anywhere in the log —
-only the masked last-4 digits, confirming finding #3 is fixed.
-
-## 8. Process cleanup
-
-The background server was stopped after validation (`pkill -f "node src/app.js"`);
-confirmed no `node src/app.js` process remained running.
-
-## 9. Known deviations from the original contract (intentional, per task scope)
-
-- `POST /api/checkout`: an existing user with no/wrong password, or a new user with
-  no password, now gets `400`/`401` instead of silently succeeding with a default
-  `"123456"` password — this is the fix for findings #2 and #7, not a regression.
-- `GET /api/admin/financial-report` and `DELETE /api/users/:id`: unauthenticated
-  requests now get `401` instead of succeeding — this is the fix for findings #4/#5,
-  not a regression.
-- `DELETE /api/users/:id` success message text changed (see 6.7) because the original
-  text described the very data-integrity bug this refactor fixes; status code and
-  response type (plain text, 200) are unchanged.
-- Error response bodies across all routes are now `{"error": "..."}` JSON instead of
-  the original ad-hoc plain-text messages (e.g. `"Curso não encontrado"`, `"Erro DB"`).
-  Only non-happy-path responses changed shape; the task's preservation requirement was
-  scoped to happy-path shapes, and centralizing error shape was itself one of the
-  MEDIUM findings (#12) to fix.
-
-## 10. Summary
-
-All 21 findings from the phase-2 audit were addressed with the matching (or
-closest-intent) playbook transformation. The app boots cleanly, all three original
-routes respond with their original happy-path shapes, and every previously-broken or
-wide-open security path (checkout auth bypass, unauthenticated admin report,
-unauthenticated destructive delete) now correctly rejects unauthenticated/invalid
-requests while continuing to serve legitimate ones.
+All 5 findings from this round's phase-2 audit were fixed exactly as specified,
+with no architectural reorganization (none was needed or requested). The app
+boots cleanly when `ADMIN_API_KEY` is set (env var or `.env`, since `dotenv` loads
+before the fail-fast check runs) and now refuses to boot at all when it is
+missing — closing the insecure-default HIGH finding without breaking local/dev
+usability. Every original endpoint (`POST /api/checkout`, `GET /api/admin/financial-report`,
+`DELETE /api/users/:id`) was exercised live and responds correctly, including the
+intentional shape change on the delete endpoint (text → JSON) and the unchanged
+401 rejection behavior for missing/wrong admin credentials.

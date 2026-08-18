@@ -1,7 +1,8 @@
 // Data access only for the `payments` table.
 const db = require('../config/database');
+const { findByIdsIn } = require('../utils/query');
 
-const PAYMENT_STATUS = { PAID: 'PAID', DENIED: 'DENIED' };
+const PAYMENT_STATUS = { PAID: 'PAID' };
 
 async function create({ enrollmentId, amount, status }) {
     const result = await db.run(
@@ -14,12 +15,12 @@ async function create({ enrollmentId, amount, status }) {
 // Fetches every payment for a batch of enrollment ids in a single query,
 // instead of the original one-query-per-enrollment N+1 pattern.
 async function findByEnrollmentIds(enrollmentIds) {
-    if (!enrollmentIds.length) return [];
-    const placeholders = enrollmentIds.map(() => '?').join(',');
-    return db.all(
-        `SELECT id, enrollment_id, amount, status FROM payments WHERE enrollment_id IN (${placeholders})`,
-        enrollmentIds
-    );
+    return findByIdsIn('payments', 'enrollment_id', enrollmentIds, [
+        'id',
+        'enrollment_id',
+        'amount',
+        'status',
+    ]);
 }
 
 async function deleteByEnrollmentUserId(userId) {
