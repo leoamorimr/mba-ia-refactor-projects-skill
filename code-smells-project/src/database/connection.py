@@ -1,17 +1,15 @@
 """Database connection factory.
 
 Replaces the old module-level `db_connection = None` / `global` pattern
-with a small class that owns its connection state. It's still exposed
-through a module-level `get_db()` accessor for convenience (models call it
-the same way controllers used to), but the state itself is encapsulated in
-an instance that could be swapped out (e.g. for an in-memory sqlite DB in
-tests) instead of being a bare global.
+with a small class that owns its connection state. There is no
+module-level singleton here anymore: `app.py` (the composition root)
+constructs exactly one `DatabaseConnection` and passes that same instance
+into every repository's constructor, so nothing reaches a shared global to
+get a connection - it either has one injected or it doesn't run.
 """
 import sqlite3
 
 from werkzeug.security import generate_password_hash
-
-from config.settings import DB_PATH
 
 SEED_PRODUCTS = [
     ("Notebook Gamer", "Notebook potente para jogos", 5999.99, 10, "informatica"),
@@ -66,7 +64,7 @@ class DatabaseConnection:
             CREATE TABLE IF NOT EXISTS usuarios (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 nome TEXT,
-                email TEXT,
+                email TEXT UNIQUE,
                 senha TEXT,
                 tipo TEXT DEFAULT 'cliente',
                 criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -113,14 +111,3 @@ class DatabaseConnection:
             usuarios_com_hash,
         )
         self._connection.commit()
-
-
-_db_instance = DatabaseConnection(DB_PATH)
-
-
-def get_db():
-    return _db_instance.get_connection()
-
-
-def init_db():
-    return _db_instance.get_connection()

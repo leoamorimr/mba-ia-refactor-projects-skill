@@ -1,8 +1,10 @@
 """Cross-entity reporting logic (order stats + discount tiers). This is
 exactly the kind of business rule the architecture guidelines say does not
 belong in a model - it spans orders, not a single entity's own fields.
+
+`ReportController` receives its `OrderRepository` via the constructor
+instead of importing the data module directly.
 """
-from models import order_model
 
 REVENUE_THRESHOLD_HIGH = 10000
 REVENUE_THRESHOLD_MID = 5000
@@ -23,19 +25,23 @@ def calculate_discount(faturamento):
     return 0
 
 
-def build_sales_report():
-    stats = order_model.get_stats()
-    faturamento = stats["faturamento"] or 0
-    desconto = calculate_discount(faturamento)
-    total_pedidos = stats["total_pedidos"]
+class ReportController:
+    def __init__(self, order_repository):
+        self.order_repository = order_repository
 
-    return {
-        "total_pedidos": total_pedidos,
-        "faturamento_bruto": round(faturamento, 2),
-        "desconto_aplicavel": round(desconto, 2),
-        "faturamento_liquido": round(faturamento - desconto, 2),
-        "pedidos_pendentes": stats["pendentes"],
-        "pedidos_aprovados": stats["aprovados"],
-        "pedidos_cancelados": stats["cancelados"],
-        "ticket_medio": round(faturamento / total_pedidos, 2) if total_pedidos > 0 else 0,
-    }
+    def build_sales_report(self):
+        stats = self.order_repository.get_stats()
+        faturamento = stats["faturamento"] or 0
+        desconto = calculate_discount(faturamento)
+        total_pedidos = stats["total_pedidos"]
+
+        return {
+            "total_pedidos": total_pedidos,
+            "faturamento_bruto": round(faturamento, 2),
+            "desconto_aplicavel": round(desconto, 2),
+            "faturamento_liquido": round(faturamento - desconto, 2),
+            "pedidos_pendentes": stats["pendentes"],
+            "pedidos_aprovados": stats["aprovados"],
+            "pedidos_cancelados": stats["cancelados"],
+            "ticket_medio": round(faturamento / total_pedidos, 2) if total_pedidos > 0 else 0,
+        }

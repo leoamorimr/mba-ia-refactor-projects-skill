@@ -30,3 +30,16 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")
 
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "5000"))
+
+# Comma-separated list of origins allowed to make cross-origin requests.
+# Defaults to localhost dev origins only - never "*" - since the wide-open
+# default previously let any website issue cross-origin requests against
+# every route, including the mutating /produtos, /pedidos and /usuarios
+# endpoints.
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
+    if origin.strip()
+]

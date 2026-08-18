@@ -8,6 +8,7 @@ role-check off of, so this validates a static admin token passed via the
 rather than falling back to a hardcoded value. A real auth system
 (sessions/JWT + roles) is a follow-up beyond this refactor's scope.
 """
+import hmac
 from functools import wraps
 
 from flask import jsonify, request
@@ -19,7 +20,10 @@ def require_admin(view_func):
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         token = request.headers.get("X-Admin-Token")
-        if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        # hmac.compare_digest instead of `!=` so the comparison is
+        # constant-time and doesn't leak how many leading characters of the
+        # submitted token matched via a timing side-channel.
+        if not ADMIN_TOKEN or not hmac.compare_digest(token or "", ADMIN_TOKEN):
             return jsonify({"erro": "Não autorizado"}), 401
         return view_func(*args, **kwargs)
     return wrapper

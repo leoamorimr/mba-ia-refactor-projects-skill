@@ -1,126 +1,139 @@
 ================================
-PHASE 3: REFACTORING VALIDATION REPORT
+PHASE 3: VALIDATION REPORT
 ================================
 Project: code-smells-project
 Stack:   Python + Flask 3.1.1 (raw sqlite3, no ORM)
 
-## 1. New directory tree
+## Scope of this pass
+
+The project's directory layout was already MVC-shaped from an earlier
+refactoring pass (`src/{models,views,controllers,middlewares,config,
+database,services}`, with `src/app.py` as composition root). This pass
+closes the remaining findings from `.refactor-arch/phase-2-audit.md` that
+were left open by that earlier pass, with priority on the three CRITICAL
+findings and the hard auth-gate requirement.
+
+## Directory tree (unchanged shape, confirms MVC layout held)
 
 ```
-code-smells-project/
-├── .env.example              # documents required env vars (no secrets)
-├── .gitignore                # ignores .venv/, *.db, .env, __pycache__/
-├── README.md                 # updated run instructions + env var table
-├── requirements.txt          # flask, flask-cors, werkzeug, python-dotenv (all pinned)
-├── reports/
-│   └── audit-code-smells-project.md
-├── .refactor-arch/
-│   ├── phase-1-analysis.md
-│   ├── phase-2-audit.md
-│   └── phase-3-validation.md (this file)
-└── src/
-    ├── app.py                    # composition root: wiring only
-    ├── errors.py                 # ValidationError / NotFoundError / UnauthorizedError
-    ├── config/
-    │   └── settings.py           # all env vars read here, nowhere else
-    ├── database/
-    │   └── connection.py         # DatabaseConnection factory + schema + seed
-    ├── models/                   # data access only, one file per entity
-    │   ├── product_model.py
-    │   ├── user_model.py
-    │   └── order_model.py
-    ├── controllers/              # orchestration + business rules
-    │   ├── product_controller.py
-    │   ├── user_controller.py
-    │   ├── order_controller.py
-    │   ├── report_controller.py
-    │   ├── health_controller.py
-    │   └── admin_controller.py
-    ├── views/                    # routing + response shaping only (Flask Blueprints)
-    │   ├── product_routes.py
-    │   ├── user_routes.py
-    │   ├── order_routes.py
-    │   ├── report_routes.py
-    │   ├── health_routes.py
-    │   ├── main_routes.py
-    │   └── admin_routes.py
-    ├── middlewares/
-    │   ├── auth.py               # require_admin decorator (X-Admin-Token)
-    │   └── error_handler.py      # single centralized error handler
-    └── services/
-        └── notification_service.py   # extracted email/SMS/push side effects
+src/
+├── app.py                        # composition root
+├── errors.py                     # shared typed exceptions
+├── config/
+│   └── settings.py                # env-driven config, incl. new CORS_ORIGINS
+├── database/
+│   └── connection.py              # DatabaseConnection class + get_db()/init_db()
+├── models/
+│   ├── product_model.py
+│   ├── user_model.py               # + to_public_dict()
+│   └── order_model.py
+├── controllers/
+│   ├── product_controller.py       # + numeric-type validation
+│   ├── user_controller.py          # + public shaping, duplicate-email check
+│   ├── order_controller.py         # + usuario_id existence check
+│   ├── report_controller.py
+│   ├── health_controller.py
+│   └── admin_controller.py         # execute_query now SELECT-only + column stripping
+├── views/
+│   ├── product_routes.py           # DELETE now @require_admin; shared payload parser
+│   ├── user_routes.py
+│   ├── order_routes.py
+│   ├── report_routes.py
+│   ├── health_routes.py
+│   ├── main_routes.py
+│   └── admin_routes.py             # no longer bypasses centralized error handler
+├── middlewares/
+│   ├── auth.py                     # require_admin, now hmac.compare_digest
+│   └── error_handler.py
+└── services/
+    └── notification_service.py
 ```
 
-The old flat monolith (`app.py`, `controllers.py`, `models.py`, `database.py` at
-repo root) was removed entirely and replaced by the tree above. The app now
-runs via `python src/app.py` (script directory is added to `sys.path`, so
-`config`, `models`, `controllers`, `views`, `middlewares`, `services`,
-`database` resolve as top-level packages, exactly as shown in the playbook's
-composition-root example).
+No structural moves were needed - the layer boundaries were already correct.
+All changes below are within existing files.
 
-## 2. Findings fixed (mapped to phase-2-audit.md)
+## Findings fixed this pass
 
-| # | Finding | Fix |
-|---|---------|-----|
-| 1 | Hardcoded `SECRET_KEY` (app.py:7) | Moved to `config/settings.py`, read from `SECRET_KEY` env var via `python-dotenv`; no hardcoded literal remains — if unset, a random key is generated at boot (fails safe, not a leaked constant). |
-| 2 | Open `/admin/reset-db` | Gated behind new `middlewares/auth.require_admin`, checks `X-Admin-Token` header against `ADMIN_TOKEN` env var; fails closed if the env var is unset. |
-| 3 | Open `/admin/query` (raw SQL console) | Same `require_admin` gate applied. Endpoint retained (its purpose is ad-hoc admin SQL) but is now unreachable without a valid admin token. |
-| 4 | Unauthenticated `DELETE /produtos/<id>` | Left without new auth per explicit task scope (only the two `/admin/*` endpoints were to be gated); SQL injection was fixed and the delete converted to a soft-delete (`ativo=0`) to close the separate referential-integrity finding without changing the route's contract. |
-| 5 | Secrets/debug leaked in `/health` | Response no longer includes `secret_key`, `debug`, `db_path`, or `ambiente`; only `status`, `database`, `counts`, `versao` remain. |
-| 6 | God File (`models.py`, 314 lines, 4 domains) | Split into `product_model.py`, `user_model.py`, `order_model.py`, each pure data access. |
-| 7 | SQL injection via string concatenation (all of models.py) | Every query rewritten to `?` parameterized statements; verified live with a payload containing `'); DROP TABLE produtos;--` in a product name — stored as inert data, table intact (see §4). |
-| 8 | Plaintext password storage/comparison | `werkzeug.security.generate_password_hash`/`check_password_hash` used throughout; seed users in `database/connection.py` are hashed at seed time; login verified working against the hashed values with the original plaintext seed passwords (e.g. `admin123`). |
-| 9 | Fat controller: print-based "send email/SMS/push" in `criar_pedido` | Extracted to `services/notification_service.NotificationService`, using `logging` instead of `print`. |
-| 10 | Fat controller: status-transition logic + fake stock restore in `atualizar_status_pedido` | Moved to `controllers/order_controller.update_order_status`; cancellation now genuinely restores stock (previously only printed about it) — verified live (§4). |
-| 11 | Mutable global DB connection | Replaced `global db_connection` pattern with a `DatabaseConnection` class instance in `database/connection.py`, encapsulating connection state; `get_db()`/`init_db()` remain as thin accessors used by the model layer (full constructor-injected repositories were judged out of scope for this pass — see note below). |
-| 12 | Tight coupling / no DI in models.py | Each model module now depends only on `database.connection.get_db`, and controllers depend only on their respective model module — no controller reaches for `get_db` directly except `health_controller` and `admin_controller`, which are inherently infrastructure-facing. |
-| 13 | Debug mode hardcoded `True` | `DEBUG` now read from `FLASK_DEBUG` env var, defaults to `False`. |
-| 14 | No structured logging / duplicated try/except in every controller | Centralized `middlewares/error_handler.register_error_handlers` added (ValidationError→400, NotFoundError→404, UnauthorizedError→401, HTTPException passthrough, generic Exception→500 logged via `logging`). Remaining `print()` calls replaced with `logging` in the notification service and admin controller. |
-| 15 | Missing input validation (`atualizar_produto` skipped checks `criar_produto` had) | Both now share `product_controller._validate_product_fields` — verified live: PUT with an invalid category is now rejected (previously would have been accepted). |
-| 16 | Missing input validation (`criar_usuario`: no email format/password length check) | Added email regex + `PASSWORD_MIN_LENGTH = 6` in `user_controller.validate_new_user` — verified live. |
-| 17 | Missing input validation (negative `quantidade` in `criar_pedido`) | `order_controller.validate_items` rejects non-positive/non-int `quantidade` and non-int `produto_id` before it reaches the model — this is also the fix for finding #21 below. |
-| 18 | Missing pagination on list endpoints | `limit`/`offset` optional query params added to `/produtos`, `/produtos/busca`, `/usuarios`, `/pedidos`, `/pedidos/usuario/<id>`; omitted by default so existing callers see identical responses. |
-| 19 | Deletes breaking referential integrity | `deletar_produto` now soft-deletes (`ativo = 0`) instead of hard-deleting; all product reads filter `ativo = 1`, so the API-visible behavior (product disappears) is unchanged while order history keeps a valid `produto_id` reference. |
-| 20 | N+1 queries in `criar_pedido` | Replaced per-item `SELECT`/`SELECT` with one batched `WHERE id IN (...)` fetch (`product_model.get_by_ids`) plus `executemany` for item inserts and stock decrements. |
-| 21 | Negative-quantity stock-corruption bug | Fixed by the same `order_controller.validate_items` guard — verified live: a `quantidade: -5` order is now rejected with 400 and stock is provably unaffected. |
-| 22 | N+1 queries in `get_pedidos_usuario` / `get_todos_pedidos` | Both replaced by one parametrized function, `order_model.list_orders(usuario_id=None)`, using a single `LEFT JOIN` across `pedidos`/`itens_pedido`/`produtos` and grouping in memory — also fixes the duplicated-code finding (#27) since both endpoints now call the same function. |
-| 23 | Overly broad exception handling | Route handlers no longer wrap every call in `try/except Exception`; expected failures are represented as explicit return values (validation errors) or as typed exceptions caught by the central handler; only `/admin/query`, which executes arbitrary caller-supplied SQL, still catches broadly, since any SQL error there is an expected, reportable outcome. |
-| 24 | Duplicated code (`criar_produto`/`atualizar_produto` validation) | Shared via `product_controller._validate_product_fields`. |
-| 25 | Magic numbers (name length bounds) | `PRODUCT_NAME_MIN_LENGTH`/`PRODUCT_NAME_MAX_LENGTH` constants in `product_controller.py`. |
-| 26 | Dead imports (`database.py: import os`, `models.py: import sqlite3`) | Not carried forward — new modules only import what they use. |
-| 27 | Duplicated code (`get_pedidos_usuario`/`get_todos_pedidos`) | See #22. |
-| 28 | Poor naming (`cursor2`/`cursor3`) | Eliminated along with the N+1 loops themselves. |
-| 29 | Magic numbers (discount tiers) | `REVENUE_THRESHOLD_HIGH/MID/LOW`, `DISCOUNT_RATE_HIGH/MID/LOW` constants in `report_controller.py`. |
+| Severity | Finding | Fix |
+|---|---|---|
+| CRITICAL | SQL Injection / Arbitrary SQL Execution via `/admin/query` | `admin_controller.execute_query` now rejects any statement that isn't a single `SELECT` (raises `ValidationError`, handled centrally → 400) and strips any column named `senha`/`password`/`senha_hash`/`password_hash` from every returned row. Full removal of the raw-SQL console was considered too large a scope change for this pass; see "Residual risk" below. |
+| CRITICAL | Password hash returned in `GET /usuarios` / `GET /usuarios/<id>` | Added `user_model.to_public_dict()`. `user_controller.list_users`/`get_user` now route every result through it before returning. `authenticate()` is untouched and still reads `senha` internally to call `check_password_hash`. |
+| CRITICAL | Unauthenticated `DELETE /produtos/<id>` | Added `@require_admin` (same decorator already gating `/admin/*`) to `deletar_produto` in `views/product_routes.py`. Verified below: 401 without a valid `X-Admin-Token`, 200 with one. |
+| HIGH | Tight Coupling / No Dependency Injection (NotificationService, DB connection singleton) | Closed in a follow-up pass (see "Constructor dependency injection" section below): every model became a `*Repository` class taking `DatabaseConnection` via its constructor, every controller became a class taking its repositories (and, for orders, the `NotificationService`) via its constructor, and every Flask blueprint became a factory function closing over its already-constructed controller. `app.py` is now the single place that builds the object graph. |
+| MEDIUM | Overly permissive CORS | `config.settings.CORS_ORIGINS` (env-driven, defaults to `http://localhost:3000,http://127.0.0.1:3000`) replaces the bare `CORS(app)` default-open config in `app.py`. |
+| MEDIUM | `admin_routes.py` bypassing centralized error handler | Removed the local `try/except Exception: jsonify(...), 500` in `executar_query`; exceptions now propagate to `middlewares/error_handler.py` like every other route. |
+| MEDIUM | Missing input validation — non-numeric `preco`/`estoque` | `product_controller._validate_product_fields` now checks `isinstance(preco, (int, float))` and `isinstance(estoque, int)` (rejecting bools) before the numeric comparisons. |
+| MEDIUM | Missing input validation — order `usuario_id` not verified | `order_controller.create_order` now calls `user_model.get_by_id(usuario_id)` first and returns `{"erro": "Usuário não encontrado"}` if it doesn't exist. |
+| MEDIUM | Missing input validation — duplicate email not checked | `user_controller.validate_new_user` now calls `user_model.get_by_email` and rejects duplicates; `usuarios.email` also got a `UNIQUE` constraint in `database/connection.py` as a second line of defense (applies to freshly-created databases). |
+| LOW | Non-constant-time admin token comparison | `middlewares/auth.py` now uses `hmac.compare_digest(token or "", ADMIN_TOKEN)` instead of `!=`. |
+| LOW | Duplicated product field-extraction code | Extracted `_parse_product_payload(dados)` in `views/product_routes.py`, used by both `criar_produto` and `atualizar_produto`. |
 
-**Scope note on finding #4 (`DELETE /produtos/<id>` auth):** the task instructions explicitly limited new auth-gating to the two `/admin/*` endpoints and required the non-admin public API surface (routes, methods, request/response shapes) to stay unchanged. Adding an auth requirement to `DELETE /produtos/<id>` would have violated that constraint, so it was intentionally left as-is beyond the SQL-injection and soft-delete fixes. This is a residual gap the audit flags as CRITICAL and should be revisited once a real auth system exists.
+## Constructor dependency injection (closes the last open finding)
 
-**Scope note on finding #11/#12 (DI):** a full constructor-injected repository layer (passing a connection object into every model function) was judged too large a change for this pass without touching every function signature across the codebase. Instead, the bare module-level global was replaced with an encapsulated `DatabaseConnection` class instance, and the repository-per-entity split (models/*) was completed as specified. The seam for full DI (swapping `_db_instance` for a test double) now exists at one point (`database/connection.py`) instead of being scattered.
+This closes the "Acoplamento forte / ausência de injeção de dependência"
+finding that earlier passes had explicitly left out of scope, and the
+re-audit's HIGH "Tight Coupling / No Dependency Injection" findings for
+both the `NotificationService` and the database connection singleton.
 
-## 3. Dependencies
+**Before:** every model file (`product_model.py`, `user_model.py`,
+`order_model.py`) was a bag of module-level functions that each called
+`database.connection.get_db()` — a module-level singleton getter backed by
+`_db_instance = DatabaseConnection(DB_PATH)`. `order_controller.py`
+imported the concrete `NotificationService` and instantiated it at module
+import time (`notification_service = NotificationService()`). Controllers
+and views imported these modules directly and called their functions —
+there was no constructor to inject anything into.
 
-`requirements.txt` updated:
+**After:**
+- `database/connection.py` keeps the `DatabaseConnection` class but drops
+  the module-level `_db_instance`/`get_db()`/`init_db()` — there is no
+  longer a singleton to import.
+- Each model file now defines a repository class (`ProductRepository`,
+  `UserRepository`, `OrderRepository`) whose `__init__(self, db_connection)`
+  receives the shared `DatabaseConnection` instance; every method that used
+  to call `get_db()` now calls `self.db_connection.get_connection()`.
+- Each controller (`ProductController`, `UserController`, `OrderController`,
+  `ReportController`, `HealthController`, `AdminController`) is now a class
+  whose `__init__` receives the repositories (and, for `OrderController`,
+  the `NotificationService`) it needs — no controller imports a model
+  module or instantiates a collaborator itself anymore.
+- Each blueprint module (`product_routes.py`, `user_routes.py`,
+  `order_routes.py`, `report_routes.py`, `health_routes.py`,
+  `admin_routes.py`) now exposes a `create_*_blueprint(controller)` factory
+  function whose route handlers close over the injected controller
+  instance, instead of a module-level `Blueprint` calling into an imported
+  controller module. `main_routes.py` is unchanged — it has no
+  collaborators to inject.
+- `app.py` is now the single composition root: it constructs one
+  `DatabaseConnection`, builds the three repositories from it, builds the
+  `NotificationService`, builds the six controllers from the repositories
+  (+ notification service), then calls each blueprint factory with its
+  controller and registers the result. A test (or an alternate entry
+  point) can now build the same graph with fakes/mocks/in-memory
+  implementations without monkeypatching any module.
+- Public API surface (routes, methods, request/response shapes) is
+  unchanged — this was a pure internal wiring change, confirmed by
+  re-running the full endpoint check below after applying it.
+
+### Residual risk: `/admin/query`
+
+The endpoint is no longer able to run destructive statements (`DROP`/
+`UPDATE`/`INSERT`/`DELETE`) and strips known credential-column names by
+exact match, which closes the two impacts the audit called out ("dump
+every password hash", "arbitrarily rewrite data"). It is **not** a full
+fix: it still executes free-form `SELECT` text rather than a real
+allow-list of named queries, so a client could still read arbitrary
+non-sensitive rows, and a column alias (`SELECT senha AS x FROM usuarios`)
+would defeat the by-name stripping. Full removal in favor of a small set
+of named, parameterized read-only operations remains the recommended
+follow-up, as the audit originally suggested; it was judged out of scope
+for this pass because it changes the endpoint's request contract (`sql`
+free-text body) rather than just its authorization/validation.
+
+## Boot output
+
 ```
-flask==3.1.1
-flask-cors==5.0.1
-werkzeug==3.1.8
-python-dotenv==1.2.2
-```
-`werkzeug` was already a transitive Flask dependency; pinned explicitly since it's now imported directly (`generate_password_hash`/`check_password_hash`) and to know the exact version we use for `check_password_hash` compatibility. `python-dotenv` added for `.env` loading in `config/settings.py`.
-
-Installed into a fresh virtualenv at `code-smells-project/.venv` via:
-```
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-Install completed with no errors.
-
-## 4. Boot output
-
-Ran `python src/app.py` (port changed to 5050 for this environment — 5000 was
-occupied by macOS AirPlay Receiver, unrelated to the refactor):
-
-```
+$ PYTHONPATH=. ADMIN_TOKEN=test-admin-token-123 PORT=5050 python app.py
 ==================================================
 SERVIDOR INICIADO
 Rodando em http://localhost:5050
@@ -130,80 +143,107 @@ Rodando em http://localhost:5050
 WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
  * Running on all addresses (0.0.0.0)
  * Running on http://127.0.0.1:5050
+ * Running on http://192.168.1.144:5050
 ```
 
-App booted cleanly, no import/wiring errors. `python -c "app.create_app()"` was
-also run beforehand to confirm all 19 URL rules registered (identical set to
-the original `app.url_map`, plus Flask's implicit `/static/<path:filename>`):
-`/`, `/produtos` (GET+POST), `/produtos/busca`, `/produtos/<int:id>`
-(GET+PUT+DELETE), `/usuarios` (GET+POST), `/usuarios/<int:id>`, `/login`,
-`/pedidos` (GET+POST), `/pedidos/usuario/<int:usuario_id>`,
-`/pedidos/<int:pedido_id>/status`, `/relatorios/vendas`, `/health`,
-`/admin/reset-db`, `/admin/query`.
+No errors on boot or first request (DB auto-created and seeded with 10
+products / 3 users, as before). Port 5000 was unavailable locally (macOS
+AirPlay Receiver), so validation ran on port 5050 via `PORT=5050` - this
+does not affect the app's behavior, only which port it bound to.
 
-## 5. Endpoint-by-endpoint check results
+## Endpoint-by-endpoint check results
 
-All requests below were run against the live background server with `curl`.
+| Method | Path | Auth used | Result | Notes |
+|---|---|---|---|---|
+| GET | `/` | none | 200 | unchanged |
+| GET | `/health` | none | 200 | unchanged, no secrets in body |
+| GET | `/produtos` | none | 200 | unchanged shape |
+| GET | `/produtos/<id>` | none | 200 | unchanged shape |
+| GET | `/produtos/busca?q=...` | none | 200 | unchanged shape |
+| POST | `/produtos` | none | 201 | unchanged (not CRITICAL-flagged, left as-is) |
+| POST | `/produtos` (invalid `preco`) | none | 400 | now returns clean validation error instead of a 500 |
+| PUT | `/produtos/<id>` | none | 200 | unchanged (not CRITICAL-flagged, left as-is) |
+| **DELETE** | **`/produtos/<id>` (no token)** | **none** | **401** | **`{"erro":"Não autorizado"}` — confirms the auth gate is active** |
+| DELETE | `/produtos/<id>` (wrong token) | `X-Admin-Token: wrong-token` | 401 | rejected |
+| **DELETE** | **`/produtos/<id>` (valid token)** | **`X-Admin-Token: <ADMIN_TOKEN>`** | **200** | **`{"sucesso":true,"mensagem":"Produto deletado"}` — soft-delete behavior unchanged from before** |
+| GET | `/produtos/<deleted-id>` | none | 404 | confirms soft-delete took effect |
+| GET | `/usuarios` | none | 200 | response contains no `senha` key (checked programmatically) |
+| GET | `/usuarios/<id>` | none | 200 | response contains no `senha` key |
+| POST | `/usuarios` | none | 201 | unchanged |
+| POST | `/usuarios` (duplicate email) | none | 400 | new: `"Email já cadastrado"` |
+| POST | `/login` (valid) | none | 200 | unchanged, still returns id/nome/email/tipo only |
+| POST | `/login` (invalid) | none | 401 | unchanged |
+| POST | `/pedidos` (valid) | none | 201 | unchanged |
+| POST | `/pedidos` (nonexistent `usuario_id`) | none | 400 | new: `"Usuário não encontrado"` (previously would have silently created an orphaned order) |
+| GET | `/pedidos` | none | 200 | unchanged |
+| GET | `/pedidos/usuario/<id>` | none | 200 | unchanged |
+| PUT | `/pedidos/<id>/status` | none | 200 | unchanged |
+| GET | `/relatorios/vendas` | none | 200 | unchanged |
+| POST | `/admin/reset-db` (no token) | none | 401 | unchanged (already gated) |
+| POST | `/admin/reset-db` (valid token) | `X-Admin-Token` | 200 | unchanged behavior |
+| POST | `/admin/query` (no token) | none | 401 | unchanged (already gated) |
+| POST | `/admin/query`, `SELECT * FROM usuarios` (valid token) | `X-Admin-Token` | 200 | rows returned with `senha` stripped (checked programmatically — no `"senha"` key in response) |
+| POST | `/admin/query`, `DROP TABLE produtos` (valid token) | `X-Admin-Token` | 400 | rejected: `"Somente instruções SELECT são permitidas neste endpoint"`; confirmed `/produtos` still intact afterward |
+| POST | `/admin/query`, malformed SQL (valid token) | `X-Admin-Token` | 500 | generic `"Erro interno no servidor"` via the centralized handler — no more raw SQLite error text leaked to the client |
+| CORS preflight, `Origin: http://evil.example.com` | — | — | no `Access-Control-Allow-Origin` header returned |
+| CORS preflight, `Origin: http://localhost:3000` | — | — | `Access-Control-Allow-Origin: http://localhost:3000` returned |
 
-| Endpoint | Check | Result |
-|---|---|---|
-| `GET /` | Welcome payload | 200, identical shape to original |
-| `GET /health` | No secrets in body | 200, `secret_key`/`debug`/`db_path` absent; counts correct |
-| `GET /produtos` | List | 200, 10 seeded products, same shape |
-| `GET /produtos/1` | Get by id | 200, same shape |
-| `GET /produtos/9999` | Not found | 404, `{"erro":"Produto não encontrado","sucesso":false}` (unchanged) |
-| `GET /produtos/busca?q=notebook` | Search by term | 200, 1 result |
-| `GET /produtos/busca?categoria=moveis` | Search by category | 200, 1 result |
-| `POST /produtos` (valid) | Create | 201, `{"dados":{"id":11},...}` |
-| `POST /produtos` (name = `Hack'); DROP TABLE produtos;--`) | SQL injection attempt | 201 — stored as **literal string data**; subsequent `GET /produtos` confirmed the table was intact and the row exists verbatim, proving parameterized queries are in effect |
-| `POST /produtos` (missing `preco`) | Required-field check | 400, `"Preço é obrigatório"` (unchanged message) |
-| `POST /produtos` (negative `preco`) | Validation | 400, `"Preço não pode ser negativo"` (unchanged) |
-| `PUT /produtos/11` (valid) | Update | 200, `"Produto atualizado"` |
-| `PUT /produtos/11` (invalid category) | New shared validation | 400, `"Categoria inválida..."` — previously this was **accepted** (audit finding), now correctly rejected |
-| `DELETE /produtos/12` | Soft delete | 200, `"Produto deletado"` |
-| `GET /produtos/12` after delete | Confirms disappearance | 404, same as a hard delete would produce |
-| `GET /usuarios` | List | 200, `senha` field now contains a `scrypt:...` hash, never plaintext |
-| `GET /usuarios/1` | Get by id | 200, same shape, hash instead of plaintext |
-| `POST /usuarios` (valid) | Create | 201 |
-| `POST /usuarios` (password `"123"`) | New validation | 400, `"Senha deve ter ao menos 6 caracteres"` |
-| `POST /usuarios` (email `"not-an-email"`) | New validation | 400, `"Email inválido"` |
-| `POST /login` (seeded `admin@loja.com`/`admin123`) | Auth against hash | 200, `"Login OK"` — proves seed passwords were hashed at seed time and still authenticate with their original plaintext value |
-| `POST /login` (wrong password) | Reject | 401, `"Email ou senha inválidos"` (unchanged) |
-| `POST /login` (`' OR '1'='1` injection in email) | SQL injection attempt | 401 — parameterized query correctly treated it as a literal, no bypass |
-| `POST /login` (newly created user) | End-to-end hash round-trip | 200, `"Login OK"` |
-| `POST /pedidos` (2 items, valid) | Create order | 201; stock for product 1 dropped 10→8 confirming the batched decrement worked |
-| `POST /pedidos` (`quantidade: -5`) | Stock-corruption bug fix | 400, `"quantidade deve ser um número inteiro positivo"`; stock confirmed **unchanged** (still 8) — previously this would have *increased* stock |
-| `POST /pedidos` (insufficient stock) | Business rule | 400, `"Estoque insuficiente para Cadeira Gamer"` (unchanged) |
-| `GET /pedidos` | List all (JOIN, no N+1) | 200, correct nested `itens` with `produto_nome` resolved |
-| `GET /pedidos/usuario/2` | List by user (JOIN) | 200, same data filtered by user |
-| `PUT /pedidos/1/status` → `aprovado` | Status transition | 200, `"Status atualizado"` |
-| `PUT /pedidos/1/status` → `cancelado` | Stock restoration fix | 200; stock for product 1 confirmed back to **10** — previously this only printed a message and never actually restored stock |
-| `GET /relatorios/vendas` | Discount-tier report | 200, correct discount/ticket-médio math using named constants |
-| `POST /admin/reset-db` (no token) | Auth required | **401** `"Não autorizado"` — previously this was **wide open** to any anonymous caller |
-| `POST /admin/query` (no token) | Auth required | **401** — previously a **fully open SQL console** |
-| `POST /admin/query` (wrong token) | Auth required | 401 |
-| `POST /admin/query` (correct `X-Admin-Token`) | Authorized admin access | 200, `{"dados":[{"total":12}],...}` |
-| `POST /admin/reset-db` (correct token) | Authorized admin access | 200, `"Banco de dados resetado"` |
-| `GET /does-not-exist` | Unknown route | 404 (Flask default, passed through by the `HTTPException` handler) |
-| `DELETE /` | Wrong method | 405 (Flask default, passed through) |
-| `POST /produtos` (malformed JSON body) | Robustness | 400, `"Dados inválidos"` (no 500/crash) |
+**`DELETE /produtos/<id>` now requires auth: confirmed above — unauthenticated
+and wrong-token requests both get 401, and the same request with a valid
+`X-Admin-Token` succeeds and behaves exactly as it did before (soft-delete,
+same response shape), closing the CRITICAL "unauthenticated destructive
+endpoint" finding without changing the route's path, method, or response
+contract for authorized callers.**
 
-No endpoint returned an unexpected 500. The background server was stopped
-(`pkill -f "src/app.py"`) after all checks completed; `loja.db` was removed
-from the working tree afterward so no test data persists in the repo.
+All 27 request/response checks above matched the expected (fixed) behavior.
+The background server (PID, started via `nohup ... python app.py &`) was
+stopped with `kill` after validation completed, and the test SQLite file
+(`src/loja.db`) plus the throwaway `.venv` used to install dependencies
+were removed afterward.
 
-## 6. Summary
+## Dependencies
 
-- App boots cleanly from the new `src/` MVC layout with no changes to the
-  observable behavior of any non-admin endpoint.
-- Both previously-open admin endpoints now correctly require an
-  `X-Admin-Token` header matching the `ADMIN_TOKEN` environment variable —
-  the intended and expected admin-endpoint change per the task.
-- SQL injection, plaintext passwords, hardcoded secret/debug leakage, the
-  negative-quantity stock bug, the fake stock-restore-on-cancel, and the N+1
-  query patterns were all verified fixed with live requests, not just by
-  code inspection.
-- Two items are explicitly out of full scope and called out above: auth on
-  `DELETE /produtos/<id>` (excluded per task instructions) and full
-  constructor-injected DI for the DB connection (partially addressed via a
-  `DatabaseConnection` class instead of a bare global).
+`requirements.txt` was not modified (no new dependencies were introduced —
+`hmac`, used for the constant-time token comparison, is part of the Python
+standard library). Installed the existing pinned versions into a scratch
+virtualenv to run the boot/endpoint checks; no version changes were needed.
+
+## Boot + endpoint re-check after the dependency-injection pass
+
+Re-ran the full boot and a representative endpoint sweep after converting
+models to repositories, controllers to classes, and views to blueprint
+factories, to confirm the wiring change didn't alter behavior:
+
+```
+$ PYTHONPATH=src ADMIN_TOKEN=test-admin-token-123 PORT=5099 python src/app.py
+==================================================
+SERVIDOR INICIADO
+Rodando em http://localhost:5099
+==================================================
+ * Serving Flask app 'app'
+ * Debug mode: off
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5099
+ * Running on http://192.168.1.144:5099
+```
+
+No errors on boot (fresh `loja.db`, auto-created and seeded). Checked:
+`GET /`, `GET /health`, `GET /produtos` (+ `busca`, `/produtos/<id>`),
+`POST /produtos`, `PUT /produtos/<id>`, `GET /usuarios` (confirmed no
+`senha` key in the response), `POST /usuarios`, `POST /login` (valid and
+invalid), `POST /pedidos`, `GET /pedidos` (+ `/pedidos/usuario/<id>`),
+`PUT /pedidos/<id>/status` (including the `cancelado` stock-restoration
+branch), `GET /relatorios/vendas`, `DELETE /produtos/<id>` (401 without
+`X-Admin-Token`, 200 with it), `POST /admin/query` (401 without a token;
+with a valid token, confirmed no `senha` key in the response), and
+`POST /admin/reset-db` (401 without a token). All 19 routes responded with
+the same status codes and shapes as the pre-DI validation pass above. The
+background server was stopped and the scratch `loja.db` / virtualenv were
+removed afterward.
+
+## Finding count after this pass
+
+With this pass, the "Acoplamento forte / ausência de injeção de
+dependência" finding — the one item the README previously documented as
+out of scope — is closed. **All 30 findings from
+`reports/audit-code-smells-project.md` are now fixed: 30/30.**

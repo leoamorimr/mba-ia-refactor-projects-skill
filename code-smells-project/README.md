@@ -71,22 +71,33 @@ completo, com descrição, impacto e recomendação de cada item, está em
 | LOW        | Nomenclatura pouco descritiva (`cursor2`, `cursor3`)                             | `models.py:187-199,219-231`                       |
 | LOW        | Números mágicos — faixas de desconto do relatório de vendas                      | `models.py:256-262`                               |
 
-28 dos 30 achados foram corrigidos na refatoração para a estrutura MVC atual (ver
+Os 30 achados foram corrigidos na refatoração para a estrutura MVC atual (ver
 histórico de commits e `.refactor-arch/phase-3-validation.md` para o mapeamento
-achado → correção e a validação end-to-end de cada endpoint). Dois itens ficaram
-fora do escopo desta rodada, por decisão explícita de escopo da tarefa:
+achado → correção e a validação end-to-end de cada endpoint): **30/30**.
 
-- **Autenticação em `DELETE /produtos/<id>`** — a tarefa limitava o novo
-  gate de autenticação apenas aos dois endpoints `/admin/*` e exigia manter
-  inalterada a superfície pública da API. A injeção de SQL foi corrigida e o
-  delete virou soft-delete (`ativo = 0`), mas o endpoint permanece sem
-  autenticação — uma lacuna residual sinalizada como CRITICAL a ser
-  revisitada quando existir um sistema de autenticação real.
-- **Injeção de dependência via construtor** — uma camada de repositórios
-  com injeção completa de conexão foi julgada grande demais para esta
-  rodada. Em vez disso, o global mutável foi encapsulado em uma classe
-  `DatabaseConnection`, e a divisão em um módulo de modelo por entidade foi
-  concluída conforme especificado.
+O último item, que havia ficado fora do escopo de uma rodada anterior por
+decisão explícita — **injeção de dependência via construtor** — foi
+concluído numa rodada seguinte: cada módulo de modelo virou uma classe de
+repositório (`ProductRepository`, `UserRepository`, `OrderRepository`) que
+recebe o `DatabaseConnection` compartilhado pelo construtor em vez de
+importar o getter de um singleton em nível de módulo; cada controller virou
+uma classe que recebe seus repositórios (e, no caso do controller de
+pedidos, o `NotificationService`) pelo construtor; e cada blueprint do
+Flask virou uma função fábrica (`create_*_blueprint(controller)`) que
+recebe o controller já construído em vez de importar um módulo de
+controller e chamar suas funções diretamente. `src/app.py` passou a ser o
+único lugar que constrói esse grafo de objetos — nenhum módulo abaixo dele
+depende de um singleton global para obter suas dependências. Detalhe
+completo da mudança e da nova bateria de validação end-to-end em
+[`.refactor-arch/phase-3-validation.md`](.refactor-arch/phase-3-validation.md).
+
+`DELETE /produtos/<id>` — inicialmente deixado sem autenticação numa rodada
+anterior de refatoração — foi revisitado e corrigido numa rodada seguinte:
+o endpoint agora exige o mesmo guard `require_admin` usado em `/admin/*`
+(header `X-Admin-Token`), fechando a lacuna CRITICAL de endpoint destrutivo
+sem controle de acesso. Requisições sem token válido recebem `401`; com
+token válido, o comportamento (soft-delete via `ativo = 0`) é o mesmo de
+antes.
 
 ## Construção da Skill
 
@@ -96,7 +107,7 @@ fora do escopo desta rodada, por decisão explícita de escopo da tarefa:
 
 **Agnosticismo de tecnologia.** A skill detecta a stack por evidência (extensão de arquivo + parsing de `requirements.txt`), nunca assumindo nomes de arquivo específicos deste projeto (`app.py`/`controllers.py`/`models.py`/`database.py`). A mesma pasta `.claude/skills/refactor-arch/`, sem uma única alteração, foi depois copiada para `ecommerce-api-legacy/` (Node.js/Express) e `task-manager-api/` (Python/Flask parcialmente organizado) e completou as 3 fases com sucesso nos dois — prova empírica de que o conhecimento em `references/` não está acoplado a este projeto.
 
-**Desafios encontrados.** O principal foi decidir o que ficava fora do escopo de uma única rodada de refatoração, para não violar a exigência de preservar a superfície pública da API: a tarefa limitava o novo gate de autenticação apenas aos endpoints `/admin/*`, então `DELETE /produtos/<id>` permaneceu sem autenticação (a injeção de SQL foi corrigida e o delete virou soft-delete); a injeção de dependência via construtor foi julgada grande demais para a rodada e foi parcialmente resolvida encapsulando o global mutável em uma classe `DatabaseConnection`, em vez de uma camada completa de repositórios.
+**Desafios encontrados.** O principal foi decidir o que ficava fora do escopo de uma única rodada de refatoração, para não violar a exigência de preservar a superfície pública da API: uma rodada anterior havia limitado o gate de autenticação apenas aos endpoints `/admin/*`, deixando `DELETE /produtos/<id>` sem autenticação; isso foi corrigido numa rodada seguinte aplicando o mesmo `require_admin` a essa rota, já que um endpoint destrutivo sem controle de acesso é CRITICAL independentemente do prefixo do path. A injeção de dependência via construtor também havia sido adiada por parecer grande demais para uma única rodada — o global mutável ficou, por um tempo, apenas encapsulado numa classe `DatabaseConnection` sem injeção real — mas foi concluída numa rodada seguinte convertendo modelos em repositórios, controllers em classes e blueprints em fábricas, todos recebendo suas dependências pelo construtor a partir de `src/app.py`.
 
 ## Resultados
 
@@ -185,4 +196,4 @@ A skill imprime o resumo da Fase 1, depois o relatório completo da Fase 2, e pa
 
 1. **Saída da própria skill** — ao final da Fase 3, ela confirma "Application boots without errors" e "All endpoints respond correctly"; se algo falhar, reporta o que quebrou em vez de declarar sucesso.
 2. **Subir a aplicação manualmente** seguindo a seção "Como rodar" acima e testar os endpoints com `curl` — exemplos completos (incluindo casos de borda e a tentativa de SQL injection) em [`.refactor-arch/phase-3-validation.md`](.refactor-arch/phase-3-validation.md).
-3. **Cruzar achado vs. correção** — comparar [`reports/audit-code-smells-project.md`](reports/audit-code-smells-project.md) com `.refactor-arch/phase-3-validation.md` e confirmar que todo item CRITICAL/HIGH aparece corrigido (ou com nota de escopo explícita, como o caso de `DELETE /produtos/<id>`).
+3. **Cruzar achado vs. correção** — comparar [`reports/audit-code-smells-project.md`](reports/audit-code-smells-project.md) com `.refactor-arch/phase-3-validation.md` e confirmar que todos os 30 itens (CRITICAL a LOW) aparecem corrigidos, incluindo a injeção de dependência via construtor.
