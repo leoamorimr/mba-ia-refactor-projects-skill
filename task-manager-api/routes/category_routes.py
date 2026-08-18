@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from controllers import category_controller
 from middlewares.auth import login_required
@@ -28,7 +28,7 @@ def create_category():
 @login_required
 def update_category(category_id):
     data = request.get_json(silent=True)
-    category, error, status_code = category_controller.update_category(category_id, data)
+    category, error, status_code = category_controller.update_category(category_id, data, caller=g.current_user)
     if error:
         return jsonify({'error': error}), status_code
     return jsonify(category), status_code
@@ -37,7 +37,7 @@ def update_category(category_id):
 @category_bp.route('/categories/<int:category_id>', methods=['DELETE'])
 @login_required
 def delete_category(category_id):
-    result, error, status_code = category_controller.delete_category(category_id)
+    result, error, status_code = category_controller.delete_category(category_id, caller=g.current_user)
     if error:
         return jsonify({'error': error}), status_code
     return jsonify(result), status_code

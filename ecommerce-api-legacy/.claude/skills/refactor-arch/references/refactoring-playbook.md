@@ -216,7 +216,9 @@ tasks = Task.query.options(joinedload(Task.user), joinedload(Task.category)).all
 # t.user and t.category are now already loaded — no per-row query
 ```
 
-## 8. Add auth/authorization middleware on sensitive routes
+## 8. Add auth/authorization middleware on every CRITICAL-flagged mutable route
+
+This applies to **any** route the audit marked CRITICAL for missing authentication — `/admin/*` or not. A `DELETE`/`POST`/`PUT`/`PATCH` handler with no auth guard is equally CRITICAL whether it lives under `/admin/` or under a plain resource path like `/produtos/<id>`; gate all of them the same way, not just the admin-prefixed ones.
 
 **Before:**
 ```python
@@ -246,7 +248,24 @@ def require_admin(view_func):
 def reset_database():
     ...
 ```
-If the project has no auth system at all yet, this is the minimum viable gate — flag in the audit report that a real auth system (sessions/JWT) is a follow-up beyond this refactor's scope, but the destructive endpoint cannot stay wide open.
+
+**Same pattern, non-admin destructive route — before:**
+```python
+@app.route("/produtos/<int:id>", methods=["DELETE"])
+def deletar_produto(id):
+    ...  # anyone can delete any product, no admin path involved
+```
+
+**After:**
+```python
+@app.route("/produtos/<int:id>", methods=["DELETE"])
+@require_admin
+def deletar_produto(id):
+    ...
+```
+The route's path, method, and response shape are unchanged — only unauthenticated requests now get a 401 instead of succeeding. That is the fix, not a scope violation.
+
+If the project has no auth system at all yet, this is the minimum viable gate — flag in the audit report that a real auth system (sessions/JWT) is a follow-up beyond this refactor's scope, but every CRITICAL-flagged mutable endpoint, admin-prefixed or not, cannot stay wide open.
 
 ## 9. Replace a deprecated API with its modern equivalent
 

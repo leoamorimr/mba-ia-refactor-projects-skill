@@ -105,7 +105,7 @@ def summary_report():
 
 
 def user_report(user_id):
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if not user:
         return None, 'Usuário não encontrado', 404
 

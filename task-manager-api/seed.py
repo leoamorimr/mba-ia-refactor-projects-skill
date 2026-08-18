@@ -14,24 +14,27 @@ def seed_data():
         Category.query.delete()
         db.session.commit()
 
+        # Demo-only credentials -- clearly not production-looking, but
+        # still satisfy the app's real password policy (8+ chars, letter
+        # and digit) so these accounts can actually log in.
         u1 = User()
         u1.name = 'João Silva'
         u1.email = 'joao@email.com'
-        u1.set_password('1234')
+        u1.set_password('demo-admin-2026')
         u1.role = 'admin'
         db.session.add(u1)
 
         u2 = User()
         u2.name = 'Maria Santos'
         u2.email = 'maria@email.com'
-        u2.set_password('abcd')
+        u2.set_password('demo-user-2026')
         u2.role = 'user'
         db.session.add(u2)
 
         u3 = User()
         u3.name = 'Pedro Oliveira'
         u3.email = 'pedro@email.com'
-        u3.set_password('pass')
+        u3.set_password('demo-manager-2026')
         u3.role = 'manager'
         db.session.add(u3)
 

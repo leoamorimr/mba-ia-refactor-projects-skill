@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from controllers import task_controller
 from middlewares.auth import login_required
@@ -20,8 +20,12 @@ def search_tasks():
     status = request.args.get('status', '')
     priority = request.args.get('priority', '')
     user_id = request.args.get('user_id', '')
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 20, type=int)
 
-    tasks, error, status_code = task_controller.search_tasks(query, status, priority, user_id)
+    tasks, error, status_code = task_controller.search_tasks(
+        query, status, priority, user_id, page=page, per_page=per_page
+    )
     if error:
         return jsonify({'error': error}), status_code
     return jsonify(tasks), status_code
@@ -55,7 +59,7 @@ def create_task():
 @login_required
 def update_task(task_id):
     data = request.get_json(silent=True)
-    task, error, status_code = task_controller.update_task(task_id, data)
+    task, error, status_code = task_controller.update_task(task_id, data, caller=g.current_user)
     if error:
         return jsonify({'error': error}), status_code
     return jsonify(task), status_code
@@ -64,7 +68,7 @@ def update_task(task_id):
 @task_bp.route('/tasks/<int:task_id>', methods=['DELETE'])
 @login_required
 def delete_task(task_id):
-    result, error, status_code = task_controller.delete_task(task_id)
+    result, error, status_code = task_controller.delete_task(task_id, caller=g.current_user)
     if error:
         return jsonify({'error': error}), status_code
     return jsonify(result), status_code

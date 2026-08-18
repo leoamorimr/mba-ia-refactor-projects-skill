@@ -12,7 +12,7 @@ VALID_ROLES = ['user', 'admin', 'manager']
 
 MIN_TITLE_LENGTH = 3
 MAX_TITLE_LENGTH = 200
-MIN_PASSWORD_LENGTH = 4
+MIN_PASSWORD_LENGTH = 8
 PRIORITY_MIN = 1
 PRIORITY_MAX = 5
 
@@ -20,7 +20,14 @@ DEFAULT_STATUS = 'pending'
 DEFAULT_PRIORITY = 3
 DEFAULT_COLOR = '#000000'
 
+DEFAULT_PAGE = 1
+DEFAULT_PER_PAGE = 20
+MAX_PER_PAGE = 100
+
 _EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9+_.-]+@[a-zA-Z0-9.-]+$')
+_COLOR_PATTERN = re.compile(r'#[0-9a-fA-F]{6}')
+_PASSWORD_HAS_LETTER = re.compile(r'[A-Za-z]')
+_PASSWORD_HAS_DIGIT = re.compile(r'\d')
 
 
 def utc_now():
@@ -52,6 +59,20 @@ def validate_email(email):
     return bool(email) and bool(_EMAIL_PATTERN.match(email))
 
 
+def is_valid_password(password):
+    """Minimum length plus a basic complexity check (letter + digit)."""
+    if not password or len(password) < MIN_PASSWORD_LENGTH:
+        return False
+    return bool(_PASSWORD_HAS_LETTER.search(password)) and bool(_PASSWORD_HAS_DIGIT.search(password))
+
+
+def clamp_pagination(page, per_page):
+    """Clamp page/per_page to sane bounds shared by every paginated listing."""
+    page = max(page or DEFAULT_PAGE, 1)
+    per_page = max(min(per_page or DEFAULT_PER_PAGE, MAX_PER_PAGE), 1)
+    return page, per_page
+
+
 def parse_date(date_string):
     for date_format in ('%Y-%m-%d', '%d/%m/%Y'):
         try:
@@ -62,7 +83,7 @@ def parse_date(date_string):
 
 
 def is_valid_color(color):
-    return bool(color) and len(color) == 7 and color[0] == '#'
+    return bool(color) and bool(_COLOR_PATTERN.fullmatch(color))
 
 
 def process_task_data(data):

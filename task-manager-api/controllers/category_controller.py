@@ -6,17 +6,13 @@ from sqlalchemy import func
 from database import db
 from models.category import Category
 from models.task import Task
-from utils.helpers import DEFAULT_COLOR, is_valid_color
+from utils.helpers import DEFAULT_COLOR, DEFAULT_PAGE, DEFAULT_PER_PAGE, clamp_pagination, is_valid_color
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PAGE = 1
-DEFAULT_PER_PAGE = 20
-
 
 def list_categories(page=DEFAULT_PAGE, per_page=DEFAULT_PER_PAGE):
-    page = max(page, 1)
-    per_page = max(min(per_page, 100), 1)
+    page, per_page = clamp_pagination(page, per_page)
 
     categories = (
         Category.query.order_by(Category.id)
@@ -67,10 +63,20 @@ def create_category(data):
     return category.to_dict(), None, 201
 
 
-def update_category(category_id, data):
-    category = Category.query.get(category_id)
+def update_category(category_id, data, caller=None):
+    """Update a category.
+
+    Categories are shared/global resources with no owner field, so unlike
+    tasks and user accounts there is no per-resource owner to compare
+    against -- the role check is the ownership check here: only an admin
+    may modify a shared category.
+    """
+    category = db.session.get(Category, category_id)
     if not category:
         return None, 'Categoria não encontrada', 404
+
+    if not (caller and caller.is_admin()):
+        return None, 'Permissão insuficiente', 403
 
     if not data:
         return None, 'Dados inválidos', 400
@@ -97,10 +103,14 @@ def update_category(category_id, data):
     return category.to_dict(), None, 200
 
 
-def delete_category(category_id):
-    category = Category.query.get(category_id)
+def delete_category(category_id, caller=None):
+    """Delete a category. Only an admin may do this (see update_category)."""
+    category = db.session.get(Category, category_id)
     if not category:
         return None, 'Categoria não encontrada', 404
+
+    if not (caller and caller.is_admin()):
+        return None, 'Permissão insuficiente', 403
 
     # Clear the FK on dependent tasks instead of leaving them pointing at a
     # deleted category (dangling category_id).

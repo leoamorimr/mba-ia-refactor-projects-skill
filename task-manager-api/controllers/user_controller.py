@@ -9,17 +9,23 @@ from config.settings import JWT_EXPIRATION_HOURS, SECRET_KEY
 from database import db
 from models.task import Task
 from models.user import User
-from utils.helpers import MIN_PASSWORD_LENGTH, VALID_ROLES, format_date, utc_now, validate_email
+from utils.helpers import (
+    DEFAULT_PAGE,
+    DEFAULT_PER_PAGE,
+    MIN_PASSWORD_LENGTH,
+    VALID_ROLES,
+    clamp_pagination,
+    format_date,
+    is_valid_password,
+    utc_now,
+    validate_email,
+)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PAGE = 1
-DEFAULT_PER_PAGE = 20
-
 
 def list_users(page=DEFAULT_PAGE, per_page=DEFAULT_PER_PAGE):
-    page = max(page, 1)
-    per_page = max(min(per_page, 100), 1)
+    page, per_page = clamp_pagination(page, per_page)
 
     users = (
         User.query.order_by(User.id)
@@ -46,7 +52,7 @@ def list_users(page=DEFAULT_PAGE, per_page=DEFAULT_PER_PAGE):
 
 
 def get_user(user_id):
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if not user:
         return None, 'Usuário não encontrado', 404
 
@@ -56,14 +62,21 @@ def get_user(user_id):
     return data, None, 200
 
 
-def create_user(data):
+def create_user(data, caller=None):
+    """Create a user.
+
+    `caller` is the authenticated `g.current_user` performing the request.
+    Only an admin caller may assign an elevated `role` -- for anyone else
+    (including self-service creation), any `role` in the payload is
+    ignored and the new account is always created as `role='user'`.
+    """
     if not data:
         return None, 'Dados inválidos', 400
 
     name = data.get('name')
     email = data.get('email')
     password = data.get('password')
-    role = data.get('role', 'user')
+    requested_role = data.get('role', 'user')
 
     if not name:
         return None, 'Nome é obrigatório', 400
@@ -75,14 +88,25 @@ def create_user(data):
     if not validate_email(email):
         return None, 'Email inválido', 400
 
-    if len(password) < MIN_PASSWORD_LENGTH:
-        return None, f'Senha deve ter no mínimo {MIN_PASSWORD_LENGTH} caracteres', 400
+    if not is_valid_password(password):
+        return None, (
+            f'Senha deve ter no mínimo {MIN_PASSWORD_LENGTH} caracteres '
+            'e conter ao menos uma letra e um número'
+        ), 400
 
     if User.query.filter_by(email=email).first():
         return None, 'Email já cadastrado', 409
 
-    if role not in VALID_ROLES:
-        return None, 'Role inválido', 400
+    caller_is_admin = bool(caller and caller.is_admin())
+
+    if caller_is_admin:
+        if requested_role not in VALID_ROLES:
+            return None, 'Role inválido', 400
+        role = requested_role
+    else:
+        # Non-admin callers (including self-service signup) can never set
+        # their own or anyone else's role -- force it server-side.
+        role = 'user'
 
     user = User(name=name, email=email, role=role)
     user.set_password(password)
@@ -98,13 +122,32 @@ def create_user(data):
     return user.to_public_dict(), None, 201
 
 
-def update_user(user_id, data):
-    user = User.query.get(user_id)
+def update_user(user_id, data, caller=None):
+    """Update a user.
+
+    `caller` is the authenticated `g.current_user` performing the request.
+    Only the account owner or an admin may update a user at all; only an
+    admin may change the `role` field (their own or anyone else's).
+    """
+    user = db.session.get(User, user_id)
     if not user:
         return None, 'Usuário não encontrado', 404
 
     if not data:
         return None, 'Dados inválidos', 400
+
+    caller_is_admin = bool(caller and caller.is_admin())
+    is_owner = bool(caller and caller.id == user_id)
+
+    if not (is_owner or caller_is_admin):
+        return None, 'Permissão insuficiente', 403
+
+    if 'role' in data:
+        if not caller_is_admin:
+            return None, 'Apenas administradores podem alterar o role', 403
+        if data['role'] not in VALID_ROLES:
+            return None, 'Role inválido', 400
+        user.role = data['role']
 
     if 'name' in data:
         user.name = data['name']
@@ -119,14 +162,12 @@ def update_user(user_id, data):
         user.email = data['email']
 
     if 'password' in data:
-        if len(data['password']) < MIN_PASSWORD_LENGTH:
-            return None, 'Senha muito curta', 400
+        if not is_valid_password(data['password']):
+            return None, (
+                f'Senha deve ter no mínimo {MIN_PASSWORD_LENGTH} caracteres '
+                'e conter ao menos uma letra e um número'
+            ), 400
         user.set_password(data['password'])
-
-    if 'role' in data:
-        if data['role'] not in VALID_ROLES:
-            return None, 'Role inválido', 400
-        user.role = data['role']
 
     if 'active' in data:
         user.active = data['active']
@@ -140,10 +181,16 @@ def update_user(user_id, data):
     return user.to_public_dict(), None, 200
 
 
-def delete_user(user_id):
-    user = User.query.get(user_id)
+def delete_user(user_id, caller=None):
+    """Delete a user. Only the account owner or an admin may do this."""
+    user = db.session.get(User, user_id)
     if not user:
         return None, 'Usuário não encontrado', 404
+
+    caller_is_admin = bool(caller and caller.is_admin())
+    is_owner = bool(caller and caller.id == user_id)
+    if not (is_owner or caller_is_admin):
+        return None, 'Permissão insuficiente', 403
 
     Task.query.filter_by(user_id=user_id).delete()
 
@@ -158,12 +205,20 @@ def delete_user(user_id):
     return {'message': 'Usuário deletado com sucesso'}, None, 200
 
 
-def get_user_tasks(user_id):
-    user = User.query.get(user_id)
+def get_user_tasks(user_id, page=DEFAULT_PAGE, per_page=DEFAULT_PER_PAGE):
+    user = db.session.get(User, user_id)
     if not user:
         return None, 'Usuário não encontrado', 404
 
-    tasks = Task.query.filter_by(user_id=user_id).all()
+    page, per_page = clamp_pagination(page, per_page)
+
+    tasks = (
+        Task.query.filter_by(user_id=user_id)
+        .order_by(Task.id)
+        .limit(per_page)
+        .offset((page - 1) * per_page)
+        .all()
+    )
     result = []
     for task in tasks:
         result.append({

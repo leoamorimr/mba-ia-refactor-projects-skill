@@ -24,7 +24,7 @@ The target is MVC: **Models**, **Views/Routes**, and **Controllers**, each with 
 ### Supporting layers
 
 - **Config** (`config/settings.py` or `config/index.js`): all secrets and environment-dependent values (`SECRET_KEY`, DB path/URI, API keys, ports) read from environment variables here, nowhere else. Nothing in models/controllers/routes should reference `os.environ`/`process.env` directly — they import from config.
-- **Middlewares** (`middlewares/error_handler.*`): one centralized error handler registered once at the app level, instead of every route/controller repeating its own try/catch-and-log. Add an auth middleware here too if the project has any endpoint that needs it (admin routes, destructive routes).
+- **Middlewares** (`middlewares/error_handler.*`): one centralized error handler registered once at the app level, instead of every route/controller repeating its own try/catch-and-log. Auth middleware belongs here too, and applying it is **not optional**: every mutable route (POST/PUT/PATCH/DELETE) that the audit marked CRITICAL for missing authentication must be gated by it, independent of path prefix — an unauthenticated destructive route outside `/admin/*` is just as CRITICAL as one inside it.
 - **Entry point / composition root** (`app.py` / `src/app.js`): the only file that imports config, initializes the DB connection, registers all routes/blueprints/routers, and starts the server. It should contain wiring, not logic.
 
 ## Suggested layout
@@ -79,4 +79,4 @@ If the project already has `models/`, `routes/`, `services/` (like a project tha
 - Zero hardcoded secrets after refactoring — everything sensitive comes from environment variables (with a safe local default only for non-secret settings like a debug flag).
 - Zero raw string-concatenated SQL — parameterized queries or the ORM's query builder only.
 - One error-handling strategy for the whole app, not one per route.
-- The original public API surface (paths, methods, request/response shapes) must keep working — this is a structural refactor, not a rewrite of the contract.
+- The original public API surface (paths, methods, request/response shapes) must keep working — this is a structural refactor, not a rewrite of the contract. This does not protect a missing auth check: adding a required auth guard to a route the audit flagged CRITICAL for missing authentication is an in-scope fix, not a contract change, even if the route responded to unauthenticated requests before.
